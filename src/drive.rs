@@ -80,19 +80,11 @@ where
     let framed = handshake.framing() == Framing::Message;
     let mut buffer = vec![0u8; CHUNK];
     loop {
-        while let Some(out) = handshake.transmit().map_err(DriveError::Handshake)? {
-            if framed {
-                let length = u32::try_from(out.len()).map_err(|_| DriveError::TooLong)?;
-                io.write_all(&length.to_be_bytes())
-                    .map_err(DriveError::Io)?;
-            }
-            io.write_all(&out).map_err(DriveError::Io)?;
-        }
-        io.flush().map_err(DriveError::Io)?;
+        send_all(&mut handshake, io, framed)?;
         if handshake.is_complete() {
             return handshake.finish().map_err(DriveError::Handshake);
         }
-        if framed {
+        let received = if framed {
             let mut length = [0u8; 4];
             io.read_exact(&mut length).map_err(DriveError::Io)?;
             let length = usize::try_from(u32::from_be_bytes(length)).unwrap_or(usize::MAX);
@@ -101,17 +93,37 @@ where
             }
             let mut message = vec![0u8; length];
             io.read_exact(&mut message).map_err(DriveError::Io)?;
-            handshake.receive(&message).map_err(DriveError::Handshake)?;
+            handshake.receive(&message)
         } else {
             let read = io.read(&mut buffer).map_err(DriveError::Io)?;
             if read == 0 {
                 return Err(DriveError::Io(io::ErrorKind::UnexpectedEof.into()));
             }
-            handshake
-                .receive(&buffer[..read])
-                .map_err(DriveError::Handshake)?;
+            handshake.receive(&buffer[..read])
+        };
+        if let Err(error) = received {
+            // A method may have queued a refusal to tell the peer (a TLS alert).
+            let _ = send_all(&mut handshake, io, framed);
+            return Err(DriveError::Handshake(error));
         }
     }
+}
+
+/// Sends everything the handshake has queued, framed when it is message-oriented.
+fn send_all<H, T>(handshake: &mut H, io: &mut T, framed: bool) -> Result<(), DriveError<H::Error>>
+where
+    H: Handshake,
+    T: Write,
+{
+    while let Some(out) = handshake.transmit().map_err(DriveError::Handshake)? {
+        if framed {
+            let length = u32::try_from(out.len()).map_err(|_| DriveError::TooLong)?;
+            io.write_all(&length.to_be_bytes())
+                .map_err(DriveError::Io)?;
+        }
+        io.write_all(&out).map_err(DriveError::Io)?;
+    }
+    io.flush().map_err(DriveError::Io)
 }
 
 /// Runs `handshake` to completion over a blocking message transport. Each message the
