@@ -1,0 +1,34 @@
+[package]
+name = "coqui-peer"
+version = "0.1.0"
+description = "Peer identity and trust independent of the authentication method: ids, a trust store with pairing, and a sans-IO handshake trait"
+readme = "README.md"
+edition = "2024"
+rust-version = "1.89"
+license = "MPL-2.0"
+repository = "https://github.com/Boriken-Dev/coqui-peer"
+publish = false
+exclude = [".*", "*.local.*"]
+
+[package.metadata.docs.rs]
+all-features = true
+
+[features]
+default = []
+# Serialize and deserialize `PeerId` and `Digest` as their text form.
+serde = ["dep:serde"]
+# Async helpers that drive a handshake over tokio streams and message transports.
+tokio = ["dep:tokio"]
+
+[dependencies]
+data-encoding = { version = "2", default-features = false, features = ["alloc"] }
+sha1 = "0.11.0"
+sha2 = { version = "0.11.1", default-features = false }
+subtle = "2.6"
+serde = { version = "1", default-features = false, features = ["derive", "std"], optional = true }
+tokio = { version = "1", default-features = false, features = ["io-util"], optional = true }
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util", "sync"] }
