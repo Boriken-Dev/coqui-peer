@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - `PeerId` and `Digest`: canonical text `<alg>:<hash>`, parsing of bare hex, colon hex and
   grouped base32, a digest allow-list type and constant-time equality.
 - `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits`: accepted and waiting peers on
-  disk (format version 1), each file recording the method name beside the key bytes (`Method:` line), with
-  per-source caps (IPv4 per address, an IPv4-mapped IPv6 address as its IPv4 address, IPv6 by
-  a prefix of `with_ipv6_prefix` bits, /64 by default) and the rerecord interval.
+  disk (format version 1), each file recording the method name beside the key bytes
+  (`Method:` line), with per-source caps (IPv4 per address, an IPv4-mapped IPv6 address as its
+  IPv4 address, IPv6 by a prefix of `with_ipv6_prefix` bits, /64 by default) and the rerecord
+  interval.
 - `KeyMaterial`: the bytes, PEM label and method name a method gives the store.
 - The pairing flow and the contract that a peer is recorded only after it proved its key.
 - A sans-IO `Handshake` / `Method` pair that works over streams and message transports, with

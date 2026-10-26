@@ -146,10 +146,10 @@ to approve). `promote_successor` refuses a successor nobody proved (`NotProven`)
 own. Promotion accepts `new` and gives `old` `Retires: now + retire_after`; from then on
 `is_accepted(old)`, `accepted_key(old)` and `accepted()` drop it. `retire_after` zero cuts the
 old key off at once (connections still on it fail their next handshake); a longer one keeps a
-possibly stolen old key usable that much longer. `successor_key(new)` is `Some` only while `old` is accepted, not
-retiring and names `new`. `remove(old)` deletes its pending successor. Events are returned, not
-reported: `take_rotation_events` drains this process's queue (at most 1024, oldest dropped);
-`successors()` and `retiring()` read the state on disk.
+possibly stolen old key usable that much longer. `successor_key(new)` is `Some` only while `old`
+is accepted, not retiring and names `new`. `remove(old)` deletes its pending successor. Events
+are returned, not reported: `take_rotation_events` drains this process's queue (at most 1024,
+oldest dropped); `successors()` and `retiring()` read the state on disk.
 
 ## Handshake, Method, drivers
 
@@ -366,15 +366,16 @@ is not counted. A desk with fewer free codes than pending device joiners refuses
 clock: `pin_ttl` for a PIN, `device_ttl` for the device flow (an invitation ends with that
 message). `receive` and `resume` refuse past it, and `check_deadline()` ends a stalled exchange
 (`Expired` to the joiner, its slot or code released). A transport reads with a timeout up to the
-deadline and calls `check_deadline` when it fires (`time_left()` is that timeout); before the first message the transport's
-own timeout applies (coqui-peer-tls: `PairConfig::timeout`).
+deadline and calls `check_deadline` when it fires (`time_left()` is that timeout); before the
+first message the transport's own timeout applies (coqui-peer-tls: `PairConfig::timeout`).
 
 **Waiting.** A responder that waits for the operator returns its `Ticket` from `awaiting()`;
 drive it with `desk.wait(ticket)` (rechecks expiry every second on the system clock) or
 `desk.decided(ticket).await` (woken by a decision or by `sweep`; an async driver sweeps now and
 then), then `resume(decision)`. Expiry follows the desk's `Clock`; under an injected clock
-call `sweep` after moving it. Dropping a responder releases its pending slot or code. A slot or code that was decided (or expired) is listed
-and decided no more, also after its responder took the decision.
+call `sweep` after moving it. Dropping a responder releases its pending slot or code. A slot or
+code that was decided (or expired) is listed and decided no more, also after its responder took
+the decision.
 
 **Rotation message.** `Rotation::announce(&successor)` is the message a peer sends over a
 session its current key authenticated; the receiver `parse`s it and calls
