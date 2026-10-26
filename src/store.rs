@@ -59,6 +59,10 @@ pub struct RotationOptions {
     /// Whether a successor waits for [`TrustStore::promote_successor`] instead of being
     /// promoted by the method the first time the peer proves it. Default `false`.
     pub require_approval: bool,
+    /// Whether [`TrustStore::promote_successor`] promotes a successor nobody proved
+    /// ([`TrustStore::prove_successor`]): the old key's holder then vouches alone for a key
+    /// that may not be its own. Default `false`.
+    pub allow_unproven: bool,
 }
 
 impl Default for RotationOptions {
@@ -66,6 +70,7 @@ impl Default for RotationOptions {
         Self {
             retire_after: Duration::from_secs(24 * 3600),
             require_approval: false,
+            allow_unproven: false,
         }
     }
 }
@@ -201,6 +206,8 @@ pub struct Successor {
     pub old: PeerId,
     /// The announced key.
     pub new: PeerId,
+    /// When its holder proved it in a handshake ([`TrustStore::prove_successor`]), if yet.
+    pub proven: Option<SystemTime>,
 }
 
 /// An accepted key with a retirement time: it is refused from `retires` on.
@@ -319,6 +326,7 @@ struct Entry {
     successor: Option<PeerId>,
     retires: Option<u64>,
     predecessor: Option<PeerId>,
+    proven: Option<u64>,
 }
 
 impl TrustStore {
@@ -780,6 +788,34 @@ impl TrustStore {
             .map(|_| pending.key)
     }
 
+    /// Records that the holder of the pending successor `new` proved it in a handshake (a
+    /// `Proven:` line with the time). A method calls it after the handshake signature verifies,
+    /// whether or not it then promotes. The first proof's time is kept.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSuccessor`] when `new` is not the pending successor of an accepted key;
+    /// [`Error::Io`] on write failure.
+    pub fn prove_successor(&self, new: &PeerId) -> Result<(), Error> {
+        let key = self.successor_key(new).ok_or(Error::NoSuccessor)?;
+        let pending = self.read("successors", new).ok_or(Error::NoSuccessor)?;
+        if pending.proven.is_some() {
+            return Ok(());
+        }
+        let old = pending.predecessor.ok_or(Error::NoSuccessor)?;
+        let text = format!(
+            "Predecessor: {}
+Method: {}
+Proven: {}
+{}",
+            old.hex(),
+            key.method,
+            unix_seconds(self.clock.now()),
+            encode_pem(&key.label, &key.bytes)
+        );
+        replace(&self.path("successors", new), &text).map_err(Error::Io)
+    }
+
     /// Accepts the pending successor `new` and gives its predecessor a retirement time
     /// ([`RotationOptions::retire_after`] from now). Returns the predecessor's id. A method calls
     /// it once the peer proved `new`, unless [`RotationOptions::require_approval`] is set; the
@@ -788,9 +824,17 @@ impl TrustStore {
     /// # Errors
     ///
     /// [`Error::NoSuccessor`] when `new` is not the pending successor of an accepted key;
-    /// [`Error::Io`] on write failure.
+    /// [`Error::NotProven`] when nobody proved it and [`RotationOptions::allow_unproven`] is not
+    /// set; [`Error::Io`] on write failure.
     pub fn promote_successor(&self, new: &PeerId) -> Result<PeerId, Error> {
         let key = self.successor_key(new).ok_or(Error::NoSuccessor)?;
+        if !self.rotation.allow_unproven
+            && self
+                .read("successors", new)
+                .is_none_or(|pending| pending.proven.is_none())
+        {
+            return Err(Error::NotProven);
+        }
         let old = self
             .read("successors", new)
             .and_then(|entry| entry.predecessor)
@@ -828,8 +872,12 @@ impl TrustStore {
             .into_iter()
             .filter(|new| self.successor_key(new).is_some())
             .filter_map(|new| {
-                let old = self.read("successors", &new)?.predecessor?;
-                Some(Successor { old, new })
+                let pending = self.read("successors", &new)?;
+                Some(Successor {
+                    old: pending.predecessor?,
+                    new,
+                    proven: pending.proven.map(from_unix_seconds),
+                })
             })
             .collect())
     }
@@ -1025,7 +1073,8 @@ fn parse_invitation(text: &str) -> Option<(u64, u32, String)> {
 fn parse(text: &str) -> Option<Entry> {
     let (headers, label, bytes) = decode_pem(text)?;
     let mut method = None;
-    let (mut source, mut successor, mut retires, mut predecessor) = (None, None, None, None);
+    let (mut source, mut successor, mut retires) = (None, None, None);
+    let (mut predecessor, mut proven) = (None, None);
     for line in headers {
         if let Some(value) = line.strip_prefix("Method: ") {
             method = Some(value.trim());
@@ -1037,6 +1086,8 @@ fn parse(text: &str) -> Option<Entry> {
             retires = Some(value.trim().parse().ok()?);
         } else if let Some(value) = line.strip_prefix("Predecessor: ") {
             predecessor = Some(value.trim().parse().ok()?);
+        } else if let Some(value) = line.strip_prefix("Proven: ") {
+            proven = Some(value.trim().parse().ok()?);
         }
     }
     Some(Entry {
@@ -1045,6 +1096,7 @@ fn parse(text: &str) -> Option<Entry> {
         successor,
         retires,
         predecessor,
+        proven,
     })
 }
 

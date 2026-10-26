@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   makes it current again.
 - `revoke_invitation` wins over redemptions in flight: a `.revoked` record refuses them and
   keeps their remaining uses from being restored.
+- `TrustStore::prove_successor` records that a successor's holder proved it (`Proven:`);
+  `promote_successor` requires that unless `RotationOptions::allow_unproven`.
 - `Error::SuccessorTaken`: an accepted key cannot announce the pending successor of another.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).

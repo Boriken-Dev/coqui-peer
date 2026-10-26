@@ -86,7 +86,8 @@ impl TrustStore {
     // rotation
     pub fn announce_successor(&self, old: &PeerId, new: &KeyMaterial) -> Result<(), Error>;
     pub fn successor_key(&self, new: &PeerId) -> Option<KeyMaterial>;
-    pub fn promote_successor(&self, new: &PeerId) -> Result<PeerId, Error>; // returns old
+    pub fn prove_successor(&self, new: &PeerId) -> Result<(), Error>;        // records Proven:
+    pub fn promote_successor(&self, new: &PeerId) -> Result<PeerId, Error>; // returns old; needs a proof
     pub fn successors(&self) -> Result<Vec<Successor>, Error>;
     pub fn retiring(&self) -> Result<Vec<Retiring>, Error>;
     pub fn take_rotation_events(&self) -> Vec<RotationEvent>;
@@ -97,8 +98,8 @@ impl Invitation { pub fn id(&self) -> InvitationId; }                           
 pub struct InvitationId;   // Copy, Ord, Display/FromStr = 64 hex; InvitationId::of(&secret) = SHA-256
 pub struct InvitationEntry { pub id: InvitationId, pub expires: SystemTime, pub uses: u32, pub label: String }
 pub const MAX_LABEL: usize = 128;
-pub struct RotationOptions { pub retire_after: Duration, pub require_approval: bool }  // Default: 24 h, false
-pub struct Successor { pub old: PeerId, pub new: PeerId }
+pub struct RotationOptions { pub retire_after: Duration, pub require_approval: bool, pub allow_unproven: bool }  // 24 h, false, false
+pub struct Successor { pub old: PeerId, pub new: PeerId, pub proven: Option<SystemTime> }
 pub struct Retiring { pub id: PeerId, pub successor: Option<PeerId>, pub retires: SystemTime }
 #[non_exhaustive] pub enum RotationEvent { Announced { old, new }, Promoted { old, new, retires } }
 pub struct Clock;    // Clone; Clock::system(), Clock::from_fn(|| SystemTime), now()
@@ -135,12 +136,15 @@ session `old` authenticated; `old` must be accepted and not retiring (`NotAccept
 not accepted (`AlreadyAccepted`), not `old` (`Material`), and not the pending successor of
 another key that is still accepted (`SuccessorTaken`: otherwise a peer that learned someone
 else's successor could claim it, and promoting it would retire the wrong key); a later
-announcement replaces the pending one. A method calls `promote_successor(new)` once the peer proves `new` in a handshake,
-unless `RotationOptions::require_approval` (then the caller calls it to approve). Promotion
-accepts `new` and gives `old` `Retires: now + retire_after`; from then on `is_accepted(old)`,
-`accepted_key(old)` and `accepted()` drop it. `retire_after` zero cuts the old key off at
-once (connections still on it fail their next handshake); a longer one keeps a possibly stolen
-old key usable that much longer. `successor_key(new)` is `Some` only while `old` is accepted, not
+announcement replaces the pending one. A method calls `prove_successor(new)` once the peer
+proves `new` in a handshake (a `Proven:` line; the first proof's time is kept), then
+`promote_successor(new)` unless `RotationOptions::require_approval` (then the caller calls it
+to approve). `promote_successor` refuses a successor nobody proved (`NotProven`) unless
+`allow_unproven`, which lets the old key's holder alone vouch for a key that may not be its
+own. Promotion accepts `new` and gives `old` `Retires: now + retire_after`; from then on
+`is_accepted(old)`, `accepted_key(old)` and `accepted()` drop it. `retire_after` zero cuts the
+old key off at once (connections still on it fail their next handshake); a longer one keeps a
+possibly stolen old key usable that much longer. `successor_key(new)` is `Some` only while `old` is accepted, not
 retiring and names `new`. `remove(old)` deletes its pending successor. Events are returned, not
 reported: `take_rotation_events` drains this process's queue (at most 1024, oldest dropped);
 `successors()` and `retiring()` read the state on disk.
@@ -363,9 +367,9 @@ unix 1800000000, and counter random sources; checked by `tests/pair.rs`.
 ## Errors
 
 `Error` (non-exhaustive): `InvalidId`, `WeakDigest`, `UnknownDigest(String)`, `Material`,
-`NotWaiting`, `AlreadyAccepted`, `NotAccepted`, `NoSuccessor`, `NotInvited`, `Expired`,
-`InvalidOptions`, `InvalidCode`, `Random`, `Io(io::Error)`. `Display` never includes key
-material, secrets or paths.
+`NotWaiting`, `AlreadyAccepted`, `NotAccepted`, `NoSuccessor`, `SuccessorTaken`, `NotProven`,
+`NotInvited`, `Expired`, `InvalidOptions`, `InvalidCode`, `Random`, `Io(io::Error)`.
+`Display` never includes key material, secrets or paths.
 
 ## On-disk store format (version 1)
 
@@ -379,6 +383,7 @@ is header lines, then one PEM block:
 ```text
 Source: 192.0.2.7:4000        waiting files only, optional; IPv6 as [addr]:port
 Predecessor: <64 hex>         successors/ only: the accepted key that announced it
+Proven: 1800000000            successors/ only, optional: unix seconds of the first proof
 Method: tls                   the method name
 Successor: <64 hex>           accepted only, optional: announced (pending) or promoted successor
 Retires: 1800086400           accepted only, optional: unix seconds; refused from then on

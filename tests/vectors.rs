@@ -99,6 +99,7 @@ fn write_store(directory: &Path) {
     let (one, two) = (example_key(), second_example_key());
     store.accept_key(&one).unwrap();
     store.announce_successor(&one.id(), &two).unwrap();
+    store.prove_successor(&two.id()).unwrap();
     store.promote_successor(&two.id()).unwrap();
     store.record_waiting(
         &third_example_key(),
@@ -174,7 +175,8 @@ fn the_committed_store_reads_back() {
         store.successors().unwrap(),
         [Successor {
             old: a.id(),
-            new: b.id()
+            new: b.id(),
+            proven: None,
         }]
     );
     assert_eq!(store.accepted_key(&one.id()), Some(one.clone()));
@@ -204,6 +206,7 @@ fn the_committed_store_reads_back() {
         ids.sort();
         ids
     });
+    later.prove_successor(&b.id()).unwrap();
     assert_eq!(later.promote_successor(&b.id()).unwrap(), a.id());
     later.accept(&three.id()).unwrap();
     assert_eq!(later.accepted_key(&three.id()), Some(three));

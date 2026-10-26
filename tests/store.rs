@@ -424,9 +424,12 @@ fn a_successor_is_promoted_and_the_old_key_retires() {
         store.successors().unwrap(),
         [Successor {
             old: old.id(),
-            new: new.id()
+            new: new.id(),
+            proven: None,
         }]
     );
+
+    store.prove_successor(&new.id()).unwrap();
 
     assert_eq!(store.promote_successor(&new.id()).unwrap(), old.id());
     assert!(store.is_accepted(&new.id()));
@@ -479,11 +482,13 @@ fn the_retire_window_is_an_option() {
         .with_rotation(RotationOptions {
             retire_after: Duration::ZERO,
             require_approval: true,
+            ..RotationOptions::default()
         });
     assert!(store.rotation().require_approval);
     let (old, new) = (key("example", 1), key("example", 2));
     store.accept_key(&old).unwrap();
     store.announce_successor(&old.id(), &new).unwrap();
+    store.prove_successor(&new.id()).unwrap();
     store.promote_successor(&new.id()).unwrap();
     assert!(!store.is_accepted(&old.id()));
     assert!(store.is_accepted(&new.id()));
@@ -549,10 +554,12 @@ fn an_accepted_key_cannot_claim_another_keys_successor() {
         store.successors().unwrap(),
         [Successor {
             old: rotating.id(),
-            new: successor.id()
+            new: successor.id(),
+            proven: None,
         }]
     );
     // Promotion retires the key that announced it, and only that one.
+    store.prove_successor(&successor.id()).unwrap();
     assert_eq!(
         store.promote_successor(&successor.id()).unwrap(),
         rotating.id()
@@ -570,6 +577,7 @@ fn a_retired_key_that_pairs_again_is_accepted_again() {
     let (old, new) = (key("example", 1), key("example", 2));
     store.accept_key(&old).unwrap();
     store.announce_successor(&old.id(), &new).unwrap();
+    store.prove_successor(&new.id()).unwrap();
     store.promote_successor(&new.id()).unwrap();
     hand.advance(24 * 3600);
     assert!(!store.is_accepted(&old.id()));
@@ -624,4 +632,43 @@ fn a_revocation_wins_over_redemptions_in_flight() {
         );
         assert!(store.invitations().unwrap().is_empty(), "round {round}");
     }
+}
+
+#[test]
+fn a_successor_is_promoted_only_once_proven_unless_allowed() {
+    let (_directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store.with_clock(hand.clock());
+    let (old, new) = (key("example", 1), key("example", 2));
+    store.accept_key(&old).unwrap();
+    store.announce_successor(&old.id(), &new).unwrap();
+    assert!(matches!(
+        store.promote_successor(&new.id()),
+        Err(Error::NotProven)
+    ));
+    assert_eq!(store.successors().unwrap()[0].proven, None);
+    hand.advance(5);
+    store.prove_successor(&new.id()).unwrap();
+    hand.advance(5);
+    store.prove_successor(&new.id()).unwrap();
+    // The first proof's time is kept.
+    assert_eq!(
+        store.successors().unwrap()[0].proven,
+        Some(UNIX_EPOCH + Duration::from_secs(T0 + 5))
+    );
+    assert_eq!(store.promote_successor(&new.id()).unwrap(), old.id());
+
+    // An option promotes without a proof.
+    let (old, new) = (key("example", 3), key("example", 4));
+    let store = store.with_rotation(RotationOptions {
+        allow_unproven: true,
+        ..RotationOptions::default()
+    });
+    store.accept_key(&old).unwrap();
+    store.announce_successor(&old.id(), &new).unwrap();
+    assert_eq!(store.promote_successor(&new.id()).unwrap(), old.id());
+    assert!(matches!(
+        store.prove_successor(&key("example", 9).id()),
+        Err(Error::NoSuccessor)
+    ));
 }
