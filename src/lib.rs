@@ -10,6 +10,7 @@
 //! | [`TrustStore`] | Accepted and waiting peers on disk; the pairing flow and its contract. |
 //! | [`Invitation`], [`RotationEvent`] | One-time pairing secrets; successor keys and retirement. |
 //! | [`Clock`], [`Random`] | The wall clock and secure random source the caller passes in. |
+//! | [`pair`] | Pairing by invitation, PIN (SPAKE2) or device flow, sans-IO, over any channel. |
 //! | [`KeyMaterial`] | The public key bytes a method gives the store, tagged with its name. |
 //! | [`Handshake`], [`Method`] | The sans-IO exchange a method implements, over any transport. |
 //! | [`drive_stream`], [`drive_messages`] | Blocking loops that run a handshake. |
@@ -18,8 +19,9 @@
 //! # Features
 //!
 //! `default = []`. `serde` reads and writes [`PeerId`] and [`Digest`] as text. `tokio` adds
-//! the [`asynch`] loops. `pin` adds `Random::os`. Nothing here keeps process-global state,
-//! and nothing reads a file or an environment variable unless the caller names a directory.
+//! the [`asynch`] loops. `pin` adds PIN pairing and `Random::os`. Nothing here keeps
+//! process-global state, and nothing reads a file or an environment variable unless the caller
+//! names a directory.
 
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
@@ -33,6 +35,7 @@ mod error;
 mod id;
 mod key;
 mod method;
+pub mod pair;
 mod random;
 mod store;
 

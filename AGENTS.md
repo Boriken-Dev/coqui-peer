@@ -9,7 +9,7 @@ package and is self-contained. Development documentation lives with the source a
 | --- | --- | --- |
 | `serde` | `Serialize`/`Deserialize` for `PeerId` and `Digest` as text | off |
 | `tokio` | `tokio` (`io-util`): module `asynch` | off |
-| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`): `Random::os` | off |
+| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`): PIN pairing, `Random::os` | off |
 
 MSRV Rust 1.89. A default build depends on `sha1`, `sha2`, `subtle` and `data-encoding`. No
 `unsafe` code. No TLS, no crypto transport, no process-global state; nothing reads a file or
@@ -187,6 +187,162 @@ of its own, such as a TLS server that does not authenticate its client at that l
 has no `PeerId` to put in `Established` (`coqui-peer-tls`'s `TlsHandshake::finish_unauthenticated`).
 `drive_*` is `complete_*` followed by `finish`. `is_complete` says the exchange is over;
 `finish` succeeds when the method verified a peer.
+
+## Pairing (module `pair`)
+
+How a joiner and a responder come to accept each other's keys, over any reliable, ordered
+channel: TLS (`coqui-peer-tls` runs it), or one that proves nothing. Sans-IO and message-framed:
+each side's `transmit` gives whole messages (call until `None`), `receive` takes one. Every
+message starts with the version byte 1 and a tag. The crate shows nothing and asks nobody:
+what a person sees or decides is returned as data, and the caller acts.
+
+```rust
+pub struct Channel { pub local: KeyMaterial, pub remote: Option<KeyMaterial>, pub binding: Option<Vec<u8>> }
+pub struct Pairing;            // Clone; Debug hides secrets
+impl Pairing {
+    pub fn invitation(inviter: PeerId, secret: [u8; 32]) -> Pairing;
+    pub fn pin(pin: Pin, role: PinRole) -> Pairing;                 // feature pin
+    pub fn device(label: &str) -> Pairing;
+    pub fn allow_unverified(self, bool) -> Pairing;  pub fn allows_unverified(&self) -> bool;
+    pub fn with_random(self, Random) -> Pairing;                    // feature pin; default Random::os()
+    pub fn mode(&self) -> Mode;  pub fn inviter(&self) -> Option<PeerId>;
+    pub fn join(self, Channel) -> Result<PairingJoiner, PairingError>;
+}
+pub enum PinRole { Typed, Shown }
+pub struct PairingJoiner;      // transmit() -> Option<Vec<u8>>, receive(&[u8]) -> Result<(), PairingError>,
+                               // shown() -> Option<&Shown>, is_complete(), finish() -> Result<Paired, PairingError>
+pub struct PairingResponder;   // new(Channel, &TrustStore, &PairingDesk, source: Option<SocketAddr>);
+                               // transmit, receive, awaiting() -> Option<Ticket>, resume(Decision),
+                               // joiner() -> Option<&KeyMaterial>, is_complete(), finish()
+#[non_exhaustive] pub enum Shown { Pin(PairingCode), UserCode { code: UserCode, expires: SystemTime } }
+pub struct Paired { pub peer: KeyMaterial, pub mode: Mode }
+#[non_exhaustive] pub enum Mode { Invitation, Pin, Device }
+#[non_exhaustive] pub enum PairRefusal { WrongCode, Expired, Exhausted, Throttled, Denied, Disabled }
+#[non_exhaustive] pub enum PairingError { Refused(PairRefusal), Protocol, Unverified, Local(Error) }
+
+pub struct CodeAlphabet { pub chars: String, pub len: usize }   // pin(): "0123456789" x 6; user_code(): "BCDFGHJKLMNPQRSTVWXZ" x 8
+impl CodeAlphabet { pub fn combinations(&self) -> u128; pub fn check(&self) -> Result<(), Error>; }
+pub struct Pin;       // generate(&CodeAlphabet, &Random), parse(&CodeAlphabet, &str), as_str(); Debug hides it
+pub struct UserCode;  // the same
+pub struct PairingCode { pub slot: Option<u8>, pub pin: Pin }  // plain data
+
+pub struct PairingDesk;        // Clone, shared by every connection and the app
+impl PairingDesk {
+    pub fn new(random: Random) -> PairingDesk;
+    pub fn with_options(self, PairingOptions) -> Result<PairingDesk, Error>;   // InvalidOptions if meaningless
+    pub fn with_limits(self, DeskLimits) -> PairingDesk;  pub fn with_clock(self, Clock) -> PairingDesk;
+    pub fn options(&self) -> PairingOptions;  pub fn limits(&self) -> DeskLimits;
+    pub fn show_pin(&self) -> Result<ShownPin, Error>;    // replaces the shown one
+    pub fn shown_pin(&self) -> Option<ShownPin>;  pub fn clear_pin(&self);
+    pub fn slots(&self) -> Vec<PendingSlot>;
+    pub fn submit_code(&self, &PairingCode) -> Result<(), PairingError>;
+    pub fn find_device(&self, approver: &str, code: &str) -> Result<PendingDevice, PairingError>;
+    pub fn approve(&self, &PendingDevice) -> Result<(), PairingError>;
+    pub fn deny(&self, &PendingDevice) -> Result<(), PairingError>;
+    pub fn sweep(&self);
+    pub fn wait(&self, Ticket) -> Decision;      // blocking
+    pub fn decided(&self, Ticket) -> Decided;    // Future<Output = Decision>
+}
+pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub device: bool,
+    pub pin_alphabet: CodeAlphabet, pub pin_ttl: Duration, pub pin_attempts: u32,
+    pub user_code_alphabet: CodeAlphabet, pub device_ttl: Duration }   // Default: all on, 10 min, 1, 10 min
+pub struct DeskLimits { pub pending: usize, pub pin_runs_per_source: usize, pub wrong_codes_per_approver: usize,
+    pub approver_window: Duration, pub wrong_codes_total: usize, pub ipv6_prefix: u8 }  // Default: 32, 8, 5, 60 s, 60, 64
+impl PairingOptions { pub fn check(&self) -> Result<(), Error>; pub fn weakened(&self) -> Vec<Weakening>; }
+impl DeskLimits { pub fn weakened(&self) -> Vec<Weakening>; }
+pub struct Weakening { pub setting: String, pub value: String, pub default: String }
+pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
+pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
+pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }
+pub enum Decision { Code(Pin), Approved, Denied, Expired }
+
+pub struct Rotation;  // announce(&KeyMaterial) -> Vec<u8>; parse(&[u8]) -> Result<KeyMaterial, PairingError>
+```
+
+**Modes.** A responder turns each off in `PairingOptions`; a joiner of a disabled mode gets
+`Disabled`.
+
+- *Invitation.* The joiner holds `secret` and the inviter's id (from a link or QR code the
+  caller formats). `join` refuses (`Unverified`) unless `channel.remote` is the inviter's key,
+  because the secret is sent as is: the channel must be confidential and authenticate the
+  inviter (TLS pinning it). The responder `redeem`s it; unknown or used up is `WrongCode`,
+  expired `Expired`.
+- *PIN* (feature `pin`). `Typed`: the responder `show_pin`s, a person types it at the joiner.
+  `Shown`: the joiner shows its own PIN with the slot (0 to 99) the responder assigns (from
+  `shown()`); the operator's app passes both to `submit_code`. Both sides run SPAKE2 (Ed25519,
+  identities = both `PeerId`s' canonical text), derive one HMAC-SHA256 key per direction by
+  HKDF-SHA256, and confirm a transcript of both keys (method, label, bytes), the slot, both
+  PAKE messages and the binding; the responder confirms first, tags are compared in constant
+  time. A run that reached the first PAKE message uses one of `pin_attempts` (default 1:
+  burned whatever the outcome; then `Exhausted`). Retrying needs a fresh PIN.
+- *Device flow.* The joiner sends a `label`; the responder issues a `UserCode`, which the
+  joiner returns in `shown()` and keeps the connection open. The operator enters it; the app
+  calls `find_device(approver, code)`, gets the joiner's `PeerId`, source and label (the app may
+  show them before deciding; the label proves nothing), then `approve` or `deny`. The joiner
+  learns `Paired`, `Denied` or `Expired`. `join` refuses (`Unverified`) when `channel.remote`
+  is `None`, unless `allow_unverified(true)`; at the TLS layer, unless the joiner verified the
+  server by a pin or roots. **Allowing an unverified responder lets a relaying attacker pair in
+  place of both sides**: the operator approves the attacker's code and the joiner trusts the
+  attacker. Use PIN mode when the responder cannot be verified.
+
+On success the responder has `accept_key`ed the joiner; the joiner's caller stores
+`Paired::peer`.
+
+**Channels.** `remote: Some` means the channel proved the other side holds that key (a TLS
+handshake does); every key the exchange carries must then equal it (`Protocol` otherwise).
+`None` takes the key from the exchange: the PIN confirmation still covers both keys, so a
+man in the middle cannot swap them without the PIN, but nothing proves either side holds its
+private key. `binding: Some` (coqui-peer-tls passes the RFC 8446 / RFC 5705 exporter, label
+`EXPORTER-coqui-pair`, 32 bytes, empty context) ties a PIN run to this channel: a relay between
+two channels fails with `WrongCode` on both sides. Without a binding, a relay that forwards
+messages unchanged between two proven channels still fails when the keys differ. A TLS 1.3
+exporter is unique to the connection; a TLS 1.2 one only with the extended master secret (RFC
+7627), which rustls negotiates when the peer offers it and insists on only with `require_ems`.
+
+**Matching and codes.** Codes are matched exactly over their alphabet: no case folding, no
+dashes or spaces; anything else is `Error::InvalidCode`. Normalising typed input and grouping
+for display are the caller's. `find_device` compares against every pending code in constant
+time.
+
+**Options cost what they weaken.** Nothing is refused for being weak; `weakened()` lists what is
+weaker than the default, and these are the costs:
+
+- fewer `combinations()` of `pin_alphabet`: an attacker's one guess per run succeeds with
+  probability `pin_attempts / combinations` per shown PIN; 10^4 codes is 1 in 10 000;
+- `pin_attempts` above 1: that many guesses per shown PIN;
+- longer `pin_ttl` / `device_ttl`: a code stays guessable or approvable longer; `pin_ttl` is
+  also the window of `pin_runs_per_source`;
+- fewer `combinations()` of `user_code_alphabet`: guessing a pending code by its entry, up to
+  the wrong-entry throttles below per window;
+- larger `pending`, `pin_runs_per_source`, `wrong_codes_*`, shorter `approver_window`: more
+  attempts, or more held connections, per window; `ipv6_prefix` above 64 lets one subnet's
+  holder count as many sources.
+
+Only meaningless values are errors (`InvalidOptions`): an empty alphabet, a repeated or
+control character, length 0, zero TTL or attempts.
+
+**Throttles** (`DeskLimits`). At most `pending` exchanges at once (`Throttled`); at most
+`pin_runs_per_source` PIN runs per source (IPv4 address, or IPv6 prefix of `ipv6_prefix` bits)
+per `pin_ttl`; at most `wrong_codes_per_approver` wrong user codes per `approver` (any text the
+app uses: an account, a session) per `approver_window`, and `wrong_codes_total` from all per
+`device_ttl`. A throttled `find_device` is refused before matching. A code not of the alphabet
+is not counted. A desk with fewer free codes than pending device joiners refuses
+(`Throttled`).
+
+**Waiting.** A responder that waits for the operator returns its `Ticket` from `awaiting()`;
+drive it with `desk.wait(ticket)` (rechecks expiry every second on the system clock) or
+`desk.decided(ticket).await` (woken by a decision or by `sweep`; an async driver sweeps now and
+then), then `resume(decision)`. Expiry follows the desk's `Clock`; under an injected clock
+call `sweep` after moving it. Dropping a responder releases its pending slot or code.
+
+**Rotation message.** `Rotation::announce(&successor)` is the message a peer sends over a
+session its current key authenticated; the receiver `parse`s it and calls
+`TrustStore::announce_successor(sender, &key)`.
+
+**Vectors.** `tests/vectors/pair/{invitation,device,pin-typed,pin-shown-plain}.txt`: every
+message of one exchange (`joiner <hex>` / `responder <hex>` lines), from keys of 32 repeated
+bytes (1 for the joiner, 2 for the responder, method `example`, label `PUBLIC KEY`), the clock at
+unix 1800000000, and counter random sources; checked by `tests/pair.rs`.
 
 ## Errors
 

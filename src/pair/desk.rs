@@ -1,0 +1,858 @@
+use std::collections::{HashMap, VecDeque};
+use std::future::Future;
+use std::net::{IpAddr, SocketAddr};
+use std::pin::Pin as Pinned;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::task::{Context, Poll, Waker};
+use std::time::{Duration, SystemTime};
+
+use crate::clock::Clock;
+use crate::error::Error;
+use crate::id::PeerId;
+use crate::pair::code::{CodeAlphabet, PairingCode, Pin, UserCode, below, same};
+use crate::pair::{PairRefusal, PairingError};
+use crate::random::Random;
+use crate::store::{DEFAULT_IPV6_PREFIX, source_key};
+
+/// Draws of a user code that is not already pending before the desk gives up.
+const ISSUE_DRAWS: usize = 64;
+
+/// What a responder offers and how its codes are made. Every field has a default; any value
+/// with a meaning is accepted, and [`weakened`](PairingOptions::weakened) lists the ones that
+/// are weaker than their default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairingOptions {
+    /// Whether joiners may pair with an invitation. Default `true`.
+    pub invitation: bool,
+    /// Whether joiners may pair with a PIN (needs the `pin` feature). Default `true`.
+    pub pin: bool,
+    /// Whether joiners may pair by the device flow. Default `true`.
+    pub device: bool,
+    /// The alphabet and length of a PIN the desk shows. Default `0123456789` × 6.
+    pub pin_alphabet: CodeAlphabet,
+    /// How long a shown PIN, or a slot waiting for a joiner's PIN, lasts. Default 10 minutes;
+    /// it is also the window of [`DeskLimits::pin_runs_per_source`].
+    pub pin_ttl: Duration,
+    /// How many runs may try a shown PIN before it is burned; a run counts once it is past
+    /// the first PAKE message, whatever its outcome. Default 1.
+    pub pin_attempts: u32,
+    /// The alphabet and length of a device-flow user code. Default RFC 8628's
+    /// `BCDFGHJKLMNPQRSTVWXZ` × 8.
+    pub user_code_alphabet: CodeAlphabet,
+    /// How long a user code waits for approval. Default 10 minutes; it is also the window of
+    /// [`DeskLimits::wrong_codes_total`].
+    pub device_ttl: Duration,
+}
+
+impl Default for PairingOptions {
+    fn default() -> Self {
+        Self {
+            invitation: true,
+            pin: true,
+            device: true,
+            pin_alphabet: CodeAlphabet::pin(),
+            pin_ttl: Duration::from_secs(600),
+            pin_attempts: 1,
+            user_code_alphabet: CodeAlphabet::user_code(),
+            device_ttl: Duration::from_secs(600),
+        }
+    }
+}
+
+/// Bounds on a desk's pending work and on guessing. Every field has a default; any value is
+/// accepted, and [`weakened`](DeskLimits::weakened) lists the ones looser than their default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DeskLimits {
+    /// Pairing exchanges in progress at once. Default 32.
+    pub pending: usize,
+    /// PIN runs one source may start per [`PairingOptions::pin_ttl`]. A source is an IPv4
+    /// address or an IPv6 prefix of [`ipv6_prefix`](DeskLimits::ipv6_prefix) bits. Default 8.
+    pub pin_runs_per_source: usize,
+    /// Wrong user codes one approver may enter per
+    /// [`approver_window`](DeskLimits::approver_window). Default 5.
+    pub wrong_codes_per_approver: usize,
+    /// The window of [`wrong_codes_per_approver`](DeskLimits::wrong_codes_per_approver).
+    /// Default 1 minute.
+    pub approver_window: Duration,
+    /// Wrong user codes all approvers together may enter per
+    /// [`PairingOptions::device_ttl`]. Default 60.
+    pub wrong_codes_total: usize,
+    /// The IPv6 prefix length sources are grouped by. Default 64.
+    pub ipv6_prefix: u8,
+}
+
+impl Default for DeskLimits {
+    fn default() -> Self {
+        Self {
+            pending: 32,
+            pin_runs_per_source: 8,
+            wrong_codes_per_approver: 5,
+            approver_window: Duration::from_secs(60),
+            wrong_codes_total: 60,
+            ipv6_prefix: DEFAULT_IPV6_PREFIX,
+        }
+    }
+}
+
+/// A setting weaker than its default, as plain data for the caller to show or log.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Weakening {
+    /// The field's name.
+    pub setting: String,
+    /// Its value as text.
+    pub value: String,
+    /// The default as text.
+    pub default: String,
+}
+
+fn note(found: &mut Vec<Weakening>, setting: &str, value: String, default: String) {
+    found.push(Weakening {
+        setting: setting.to_owned(),
+        value,
+        default,
+    });
+}
+
+impl PairingOptions {
+    /// Whether every option has a meaning.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidOptions`] for a meaningless alphabet, a zero TTL or zero attempts.
+    pub fn check(&self) -> Result<(), Error> {
+        self.pin_alphabet.check()?;
+        self.user_code_alphabet.check()?;
+        if self.pin_ttl.is_zero() || self.device_ttl.is_zero() || self.pin_attempts == 0 {
+            return Err(Error::InvalidOptions);
+        }
+        Ok(())
+    }
+
+    /// The options weaker than their default: fewer code combinations, more attempts per PIN,
+    /// longer lifetimes. Turning a mode off weakens nothing.
+    pub fn weakened(&self) -> Vec<Weakening> {
+        let default = Self::default();
+        let mut found = Vec::new();
+        if self.pin_alphabet.combinations() < default.pin_alphabet.combinations() {
+            note(
+                &mut found,
+                "pin_alphabet",
+                self.pin_alphabet.combinations().to_string(),
+                default.pin_alphabet.combinations().to_string(),
+            );
+        }
+        if self.pin_attempts > default.pin_attempts {
+            note(
+                &mut found,
+                "pin_attempts",
+                self.pin_attempts.to_string(),
+                default.pin_attempts.to_string(),
+            );
+        }
+        if self.pin_ttl > default.pin_ttl {
+            note(
+                &mut found,
+                "pin_ttl",
+                self.pin_ttl.as_secs().to_string(),
+                default.pin_ttl.as_secs().to_string(),
+            );
+        }
+        if self.user_code_alphabet.combinations() < default.user_code_alphabet.combinations() {
+            note(
+                &mut found,
+                "user_code_alphabet",
+                self.user_code_alphabet.combinations().to_string(),
+                default.user_code_alphabet.combinations().to_string(),
+            );
+        }
+        if self.device_ttl > default.device_ttl {
+            note(
+                &mut found,
+                "device_ttl",
+                self.device_ttl.as_secs().to_string(),
+                default.device_ttl.as_secs().to_string(),
+            );
+        }
+        found
+    }
+}
+
+impl DeskLimits {
+    /// The limits looser than their default.
+    pub fn weakened(&self) -> Vec<Weakening> {
+        let default = Self::default();
+        let mut found = Vec::new();
+        for (setting, value, standard) in [
+            ("pending", self.pending, default.pending),
+            (
+                "pin_runs_per_source",
+                self.pin_runs_per_source,
+                default.pin_runs_per_source,
+            ),
+            (
+                "wrong_codes_per_approver",
+                self.wrong_codes_per_approver,
+                default.wrong_codes_per_approver,
+            ),
+            (
+                "wrong_codes_total",
+                self.wrong_codes_total,
+                default.wrong_codes_total,
+            ),
+        ] {
+            if value > standard {
+                note(&mut found, setting, value.to_string(), standard.to_string());
+            }
+        }
+        if self.approver_window < default.approver_window {
+            note(
+                &mut found,
+                "approver_window",
+                self.approver_window.as_secs().to_string(),
+                default.approver_window.as_secs().to_string(),
+            );
+        }
+        if self.ipv6_prefix > default.ipv6_prefix {
+            note(
+                &mut found,
+                "ipv6_prefix",
+                self.ipv6_prefix.to_string(),
+                default.ipv6_prefix.to_string(),
+            );
+        }
+        found
+    }
+}
+
+/// A responder's handle on a decision it waits for: a joiner's PIN typed by the operator, or
+/// the approval of a device-flow joiner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Ticket(u64);
+
+/// How a waiting exchange is settled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Decision {
+    /// The operator typed this PIN for a joiner that shows its own.
+    Code(Pin),
+    /// The operator approved a device-flow joiner.
+    Approved,
+    /// The operator denied a device-flow joiner.
+    Denied,
+    /// Nobody decided before the code expired.
+    Expired,
+}
+
+/// A PIN the desk shows, for the caller to display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShownPin {
+    /// The PIN.
+    pub pin: Pin,
+    /// When it stops being accepted.
+    pub expires: SystemTime,
+}
+
+/// A joiner that shows its own PIN and waits for the operator to type it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingSlot {
+    /// The slot the desk assigned, which the joiner shows with its PIN.
+    pub slot: u8,
+    /// The joiner's id.
+    pub peer: PeerId,
+    /// Where it connected from, when known.
+    pub source: Option<SocketAddr>,
+    /// When the slot expires.
+    pub expires: SystemTime,
+}
+
+/// A device-flow joiner found by its user code: what an app may show before it approves or
+/// denies.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingDevice {
+    /// The joiner's id.
+    pub peer: PeerId,
+    /// Where it connected from, when known.
+    pub source: Option<SocketAddr>,
+    /// The label the joiner sent; the joiner chose it, so it proves nothing.
+    pub label: String,
+    /// When its user code expires.
+    pub expires: SystemTime,
+    ticket: Ticket,
+}
+
+#[derive(Debug)]
+enum Kind {
+    Slot(u8),
+    Device(UserCode),
+}
+
+#[derive(Debug)]
+struct Waiting {
+    kind: Kind,
+    peer: PeerId,
+    source: Option<SocketAddr>,
+    label: String,
+    expires: SystemTime,
+    decision: Option<Decision>,
+    waker: Option<Waker>,
+}
+
+#[derive(Debug)]
+struct State {
+    options: PairingOptions,
+    limits: DeskLimits,
+    clock: Clock,
+    random: Random,
+    shown: Option<(ShownPin, u32)>,
+    gone: PairRefusal,
+    waiting: HashMap<u64, Waiting>,
+    next: u64,
+    pending: usize,
+    runs: HashMap<Option<IpAddr>, VecDeque<SystemTime>>,
+    wrong_by: HashMap<String, VecDeque<SystemTime>>,
+    wrong_all: VecDeque<SystemTime>,
+}
+
+#[derive(Debug)]
+struct Inner {
+    state: Mutex<State>,
+    changed: Condvar,
+}
+
+/// The responder's side of pairing that involves the operator: the PIN it shows, joiners that
+/// wait for a typed PIN or an approval, and the throttles. Clone it to share it between the
+/// connections and the app's own surface.
+///
+/// The desk shows nothing and asks nobody: the caller displays [`show_pin`]'s PIN, lists
+/// [`slots`], passes what the operator typed to [`submit_code`] or [`find_device`], and calls
+/// [`approve`] or [`deny`].
+///
+/// [`show_pin`]: PairingDesk::show_pin
+/// [`slots`]: PairingDesk::slots
+/// [`submit_code`]: PairingDesk::submit_code
+/// [`find_device`]: PairingDesk::find_device
+/// [`approve`]: PairingDesk::approve
+/// [`deny`]: PairingDesk::deny
+#[derive(Debug, Clone)]
+pub struct PairingDesk {
+    inner: Arc<Inner>,
+}
+
+/// A pairing exchange in progress, counted against [`DeskLimits::pending`] until dropped; its
+/// waiting entry goes with it.
+#[derive(Debug)]
+pub(crate) struct Admission {
+    inner: Arc<Inner>,
+    id: u64,
+}
+
+impl Admission {
+    pub(crate) fn ticket(&self) -> Ticket {
+        Ticket(self.id)
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        state.pending = state.pending.saturating_sub(1);
+        state.waiting.remove(&self.id);
+        drop(state);
+        self.inner.changed.notify_all();
+    }
+}
+
+/// Drops the times older than `window` before `now`.
+fn prune(times: &mut VecDeque<SystemTime>, now: SystemTime, window: Duration) {
+    while times
+        .front()
+        .is_some_and(|at| now.duration_since(*at).unwrap_or_default() >= window)
+    {
+        times.pop_front();
+    }
+}
+
+impl State {
+    /// Expires the shown PIN and waiting entries by the clock; whether anything changed.
+    fn sweep(&mut self) -> bool {
+        let now = self.clock.now();
+        let mut changed = false;
+        if self
+            .shown
+            .as_ref()
+            .is_some_and(|(shown, _)| now >= shown.expires)
+        {
+            self.shown = None;
+            self.gone = PairRefusal::Expired;
+            changed = true;
+        }
+        for waiting in self.waiting.values_mut() {
+            if waiting.decision.is_none() && now >= waiting.expires {
+                waiting.decision = Some(Decision::Expired);
+                if let Some(waker) = waiting.waker.take() {
+                    waker.wake();
+                }
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn decide(&mut self, ticket: Ticket, decision: Decision) -> Result<(), PairingError> {
+        let waiting = self
+            .waiting
+            .get_mut(&ticket.0)
+            .filter(|waiting| waiting.decision.is_none())
+            .ok_or(PairingError::Refused(PairRefusal::Expired))?;
+        waiting.decision = Some(decision);
+        if let Some(waker) = waiting.waker.take() {
+            waker.wake();
+        }
+        Ok(())
+    }
+}
+
+impl PairingDesk {
+    /// A desk with the default options and limits, the system clock, and `random` for PINs,
+    /// slots and user codes.
+    pub fn new(random: Random) -> Self {
+        Self {
+            inner: Arc::new(Inner {
+                state: Mutex::new(State {
+                    options: PairingOptions::default(),
+                    limits: DeskLimits::default(),
+                    clock: Clock::system(),
+                    random,
+                    shown: None,
+                    gone: PairRefusal::Exhausted,
+                    waiting: HashMap::new(),
+                    next: 0,
+                    pending: 0,
+                    runs: HashMap::new(),
+                    wrong_by: HashMap::new(),
+                    wrong_all: VecDeque::new(),
+                }),
+                changed: Condvar::new(),
+            }),
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// This desk with `options`; it applies to every clone.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidOptions`] as [`PairingOptions::check`].
+    pub fn with_options(self, options: PairingOptions) -> Result<Self, Error> {
+        options.check()?;
+        self.state().options = options;
+        Ok(self)
+    }
+
+    /// This desk with `limits`; it applies to every clone.
+    #[must_use]
+    pub fn with_limits(self, limits: DeskLimits) -> Self {
+        self.state().limits = limits;
+        self
+    }
+
+    /// This desk reading `clock`; it applies to every clone.
+    #[must_use]
+    pub fn with_clock(self, clock: Clock) -> Self {
+        self.state().clock = clock;
+        self
+    }
+
+    /// The options in force.
+    pub fn options(&self) -> PairingOptions {
+        self.state().options.clone()
+    }
+
+    /// The limits in force.
+    pub fn limits(&self) -> DeskLimits {
+        self.state().limits
+    }
+
+    /// Makes a new PIN for joiners to type, replacing the one shown before, and returns it for
+    /// the caller to display.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Random`] when the random source fails.
+    pub fn show_pin(&self) -> Result<ShownPin, Error> {
+        let mut state = self.state();
+        let pin = Pin::generate(&state.options.pin_alphabet, &state.random)?;
+        let shown = ShownPin {
+            pin,
+            expires: state.clock.now() + state.options.pin_ttl,
+        };
+        state.shown = Some((shown.clone(), state.options.pin_attempts));
+        Ok(shown)
+    }
+
+    /// The PIN shown now, while it lasts and has attempts left.
+    pub fn shown_pin(&self) -> Option<ShownPin> {
+        let mut state = self.state();
+        state.sweep();
+        state.shown.as_ref().map(|(shown, _)| shown.clone())
+    }
+
+    /// Withdraws the shown PIN.
+    pub fn clear_pin(&self) {
+        let mut state = self.state();
+        state.shown = None;
+        state.gone = PairRefusal::Exhausted;
+    }
+
+    /// The joiners that show their own PIN and wait for it to be typed, by slot.
+    pub fn slots(&self) -> Vec<PendingSlot> {
+        let mut state = self.state();
+        state.sweep();
+        let mut slots: Vec<PendingSlot> = state
+            .waiting
+            .values()
+            .filter(|waiting| waiting.decision.is_none())
+            .filter_map(|waiting| match waiting.kind {
+                Kind::Slot(slot) => Some(PendingSlot {
+                    slot,
+                    peer: waiting.peer,
+                    source: waiting.source,
+                    expires: waiting.expires,
+                }),
+                Kind::Device(_) => None,
+            })
+            .collect();
+        slots.sort_by_key(|slot| slot.slot);
+        slots
+    }
+
+    /// Hands the PIN the operator typed to the joiner waiting in `code.slot`. Whether it is
+    /// right is found by the PAKE; the slot is used either way.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::Refused`] with [`PairRefusal::WrongCode`] when no joiner waits in that
+    /// slot (or `slot` is `None`).
+    pub fn submit_code(&self, code: &PairingCode) -> Result<(), PairingError> {
+        let mut state = self.state();
+        state.sweep();
+        let ticket = state
+            .waiting
+            .iter()
+            .find(|(_, waiting)| {
+                waiting.decision.is_none()
+                    && matches!(waiting.kind, Kind::Slot(slot) if Some(slot) == code.slot)
+            })
+            .map(|(id, _)| Ticket(*id))
+            .ok_or(PairingError::Refused(PairRefusal::WrongCode))?;
+        state.decide(ticket, Decision::Code(code.pin.clone()))?;
+        drop(state);
+        self.inner.changed.notify_all();
+        Ok(())
+    }
+
+    /// The device-flow joiner whose user code the operator entered, for the caller to approve
+    /// or deny. `approver` names who entered it (an account, a session), for the per-approver
+    /// throttle.
+    ///
+    /// The code is matched exactly over the user-code alphabet, in constant time against every
+    /// pending code.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::Local`] with [`Error::InvalidCode`] when `code` is not of the alphabet
+    /// (not counted as a wrong entry); [`PairRefusal::Throttled`] when the approver or all
+    /// approvers entered too many wrong codes recently; [`PairRefusal::WrongCode`] when no
+    /// pending joiner has it (counted).
+    pub fn find_device(&self, approver: &str, code: &str) -> Result<PendingDevice, PairingError> {
+        let mut state = self.state();
+        state.sweep();
+        let entered = UserCode::parse(&state.options.user_code_alphabet, code)
+            .map_err(PairingError::Local)?;
+        let now = state.clock.now();
+        let (limits, ttl) = (state.limits, state.options.device_ttl);
+        let by = state.wrong_by.entry(approver.to_owned()).or_default();
+        prune(by, now, limits.approver_window);
+        let by_count = by.len();
+        prune(&mut state.wrong_all, now, ttl);
+        if by_count >= limits.wrong_codes_per_approver
+            || state.wrong_all.len() >= limits.wrong_codes_total
+        {
+            return Err(PairingError::Refused(PairRefusal::Throttled));
+        }
+        let mut found = None;
+        for (id, waiting) in &state.waiting {
+            if let Kind::Device(issued) = &waiting.kind
+                && waiting.decision.is_none()
+                && same(issued.as_str(), entered.as_str())
+            {
+                found = Some(PendingDevice {
+                    peer: waiting.peer,
+                    source: waiting.source,
+                    label: waiting.label.clone(),
+                    expires: waiting.expires,
+                    ticket: Ticket(*id),
+                });
+            }
+        }
+        match found {
+            Some(device) => Ok(device),
+            None => {
+                state
+                    .wrong_by
+                    .entry(approver.to_owned())
+                    .or_default()
+                    .push_back(now);
+                state.wrong_all.push_back(now);
+                Err(PairingError::Refused(PairRefusal::WrongCode))
+            }
+        }
+    }
+
+    /// Approves a device-flow joiner: its responder accepts its key and tells it so.
+    ///
+    /// # Errors
+    ///
+    /// [`PairRefusal::Expired`] when it expired, was decided, or disconnected.
+    pub fn approve(&self, device: &PendingDevice) -> Result<(), PairingError> {
+        self.settle(device.ticket, Decision::Approved)
+    }
+
+    /// Denies a device-flow joiner: its responder refuses it and tells it so.
+    ///
+    /// # Errors
+    ///
+    /// As [`approve`](PairingDesk::approve).
+    pub fn deny(&self, device: &PendingDevice) -> Result<(), PairingError> {
+        self.settle(device.ticket, Decision::Denied)
+    }
+
+    fn settle(&self, ticket: Ticket, decision: Decision) -> Result<(), PairingError> {
+        let mut state = self.state();
+        state.sweep();
+        state.decide(ticket, decision)?;
+        drop(state);
+        self.inner.changed.notify_all();
+        Ok(())
+    }
+
+    /// Expires the shown PIN and the waiting joiners by the clock, waking their responders.
+    /// The waits below also do it; call it when the clock is not the system's.
+    pub fn sweep(&self) {
+        let changed = self.state().sweep();
+        if changed {
+            self.inner.changed.notify_all();
+        }
+    }
+
+    /// Blocks until `ticket` is decided or expires. Under the system clock it rechecks expiry
+    /// every second; under another clock, [`sweep`](PairingDesk::sweep) wakes it.
+    pub fn wait(&self, ticket: Ticket) -> Decision {
+        let mut state = self.state();
+        loop {
+            state.sweep();
+            match state.waiting.get_mut(&ticket.0) {
+                None => return Decision::Expired,
+                Some(waiting) => {
+                    if let Some(decision) = waiting.decision.take() {
+                        return decision;
+                    }
+                }
+            }
+            state = self
+                .inner
+                .changed
+                .wait_timeout(state, Duration::from_secs(1))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+        }
+    }
+
+    /// A future of [`wait`](PairingDesk::wait)'s decision. It is woken by a decision or by
+    /// [`sweep`](PairingDesk::sweep); an async caller that relies on expiry sweeps now and then.
+    pub fn decided(&self, ticket: Ticket) -> Decided {
+        Decided {
+            desk: self.clone(),
+            ticket,
+        }
+    }
+
+    /// The random source PINs, slots and codes are drawn from.
+    pub(crate) fn random(&self) -> Random {
+        self.state().random.clone()
+    }
+
+    pub(crate) fn admit(&self) -> Result<Admission, PairRefusal> {
+        let mut state = self.state();
+        if state.pending >= state.limits.pending {
+            return Err(PairRefusal::Throttled);
+        }
+        state.pending += 1;
+        state.next += 1;
+        Ok(Admission {
+            inner: self.inner.clone(),
+            id: state.next,
+        })
+    }
+
+    /// Counts a PIN run from `source`, or refuses it past the per-source limit.
+    pub(crate) fn pin_run(&self, source: Option<SocketAddr>) -> Result<(), PairRefusal> {
+        let mut state = self.state();
+        let now = state.clock.now();
+        let (ttl, limits) = (state.options.pin_ttl, state.limits);
+        let bucket = source.map(|s| source_key(s.ip(), limits.ipv6_prefix));
+        let runs = state.runs.entry(bucket).or_default();
+        prune(runs, now, ttl);
+        if runs.len() >= limits.pin_runs_per_source {
+            return Err(PairRefusal::Throttled);
+        }
+        runs.push_back(now);
+        Ok(())
+    }
+
+    /// Whether a shown PIN is there to try; why not, when not.
+    pub(crate) fn pin_ready(&self) -> Result<(), PairRefusal> {
+        let mut state = self.state();
+        state.sweep();
+        if state.shown.is_some() {
+            Ok(())
+        } else {
+            Err(state.gone)
+        }
+    }
+
+    /// Takes one attempt at the shown PIN, burning it after the last.
+    pub(crate) fn take_pin(&self) -> Result<Pin, PairRefusal> {
+        let mut state = self.state();
+        state.sweep();
+        let gone = state.gone;
+        let (shown, left) = state.shown.as_mut().ok_or(gone)?;
+        let pin = shown.pin.clone();
+        *left -= 1;
+        if *left == 0 {
+            state.shown = None;
+            state.gone = PairRefusal::Exhausted;
+        }
+        Ok(pin)
+    }
+
+    pub(crate) fn open_slot(
+        &self,
+        admission: &Admission,
+        peer: PeerId,
+        source: Option<SocketAddr>,
+    ) -> Result<u8, PairingError> {
+        let mut state = self.state();
+        state.sweep();
+        let used: Vec<u8> = state
+            .waiting
+            .values()
+            .filter_map(|waiting| match waiting.kind {
+                Kind::Slot(slot) => Some(slot),
+                Kind::Device(_) => None,
+            })
+            .collect();
+        let free: Vec<u8> = (0..100).filter(|slot| !used.contains(slot)).collect();
+        if free.is_empty() {
+            return Err(PairingError::Refused(PairRefusal::Throttled));
+        }
+        let slot = free[below(&state.random, free.len()).map_err(PairingError::Local)?];
+        let expires = state.clock.now() + state.options.pin_ttl;
+        state.waiting.insert(
+            admission.id,
+            Waiting {
+                kind: Kind::Slot(slot),
+                peer,
+                source,
+                label: String::new(),
+                expires,
+                decision: None,
+                waker: None,
+            },
+        );
+        Ok(slot)
+    }
+
+    pub(crate) fn issue(
+        &self,
+        admission: &Admission,
+        peer: PeerId,
+        source: Option<SocketAddr>,
+        label: &str,
+    ) -> Result<(UserCode, SystemTime), PairingError> {
+        let mut state = self.state();
+        state.sweep();
+        let issued = state
+            .waiting
+            .values()
+            .filter(|waiting| matches!(waiting.kind, Kind::Device(_)))
+            .count();
+        // A small alphabet can run out of distinct codes, so drawing is bounded.
+        if issued as u128 >= state.options.user_code_alphabet.combinations() {
+            return Err(PairingError::Refused(PairRefusal::Throttled));
+        }
+        let mut code = None;
+        for _ in 0..ISSUE_DRAWS {
+            let drawn = UserCode::generate(&state.options.user_code_alphabet, &state.random)
+                .map_err(PairingError::Local)?;
+            let taken = state
+                .waiting
+                .values()
+                .any(|waiting| matches!(&waiting.kind, Kind::Device(issued) if issued == &drawn));
+            if !taken {
+                code = Some(drawn);
+                break;
+            }
+        }
+        let code = code.ok_or(PairingError::Refused(PairRefusal::Throttled))?;
+        let expires = state.clock.now() + state.options.device_ttl;
+        state.waiting.insert(
+            admission.id,
+            Waiting {
+                kind: Kind::Device(code.clone()),
+                peer,
+                source,
+                label: label.to_owned(),
+                expires,
+                decision: None,
+                waker: None,
+            },
+        );
+        Ok((code, expires))
+    }
+}
+
+/// The future of [`PairingDesk::decided`].
+#[derive(Debug)]
+pub struct Decided {
+    desk: PairingDesk,
+    ticket: Ticket,
+}
+
+impl Future for Decided {
+    type Output = Decision;
+
+    fn poll(self: Pinned<&mut Self>, context: &mut Context<'_>) -> Poll<Decision> {
+        let mut state = self.desk.state();
+        state.sweep();
+        match state.waiting.get_mut(&self.ticket.0) {
+            None => Poll::Ready(Decision::Expired),
+            Some(waiting) => match waiting.decision.take() {
+                Some(decision) => Poll::Ready(decision),
+                None => {
+                    waiting.waker = Some(context.waker().clone());
+                    Poll::Pending
+                }
+            },
+        }
+    }
+}

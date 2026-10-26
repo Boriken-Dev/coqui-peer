@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `successors`, `retiring` and `take_rotation_events`, with `RotationOptions` (retire window,
   default 24 hours; `require_approval`). A promoted key's predecessor is refused from its
   retirement time on.
+- Pairing, module `pair`: a sans-IO exchange over any channel by invitation, by PIN (SPAKE2
+  with HKDF and HMAC key confirmation over both keys and an optional channel binding; feature
+  `pin`) or by an RFC 8628-style device flow; `PairingDesk` for the responder's shown PIN,
+  slots, user codes, approvals and throttles; `PairingOptions` and `DeskLimits` with defaults
+  and `weakened()`; `CodeAlphabet`, `Pin`, `UserCode`; the `Rotation` announcement message.
+  Message vectors in `tests/vectors/pair/`.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).
 
