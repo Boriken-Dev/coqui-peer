@@ -917,3 +917,116 @@ fn a_proven_key_alone_does_not_verify_the_responder_for_the_device_flow() {
             .is_ok()
     );
 }
+
+#[test]
+fn a_stalled_exchange_ends_at_its_deadline_and_frees_its_code() {
+    let world = fresh();
+    let mut responder = PairingResponder::new(
+        proven(&key(2), &key(1), b""),
+        &world.store,
+        &world.desk,
+        None,
+    );
+    assert_eq!(responder.deadline(), None);
+    let mut joiner = Pairing::device("")
+        .join(proven(&key(1), &key(2), b""))
+        .unwrap();
+    responder.receive(&joiner.transmit().unwrap()).unwrap();
+    assert_eq!(
+        responder.deadline(),
+        Some(UNIX_EPOCH + Duration::from_secs(T0 + 600))
+    );
+    let issued = responder.transmit().unwrap();
+    joiner.receive(&issued).unwrap();
+    // The joiner stalls; the transport times out and checks.
+    world.hand.advance(599);
+    assert!(responder.check_deadline().is_ok());
+    world.hand.advance(1);
+    assert!(matches!(
+        responder.check_deadline(),
+        Err(PairingError::Refused(PairRefusal::Expired))
+    ));
+    let told = responder.transmit().unwrap();
+    assert!(matches!(
+        joiner.receive(&told),
+        Err(PairingError::Refused(PairRefusal::Expired))
+    ));
+    // Its pending place is free again: a source may hold four (the default), and this one
+    // holds none now.
+    assert_eq!(world.desk.limits().pending_per_source, 4);
+    drop(responder);
+    let mut held = Vec::new();
+    for seed in 10..14 {
+        let mut other = PairingResponder::new(
+            proven(&key(2), &key(seed), b""),
+            &world.store,
+            &world.desk,
+            None,
+        );
+        let mut joiner = Pairing::device("")
+            .join(proven(&key(seed), &key(2), b""))
+            .unwrap();
+        other.receive(&joiner.transmit().unwrap()).unwrap();
+        held.push(other);
+    }
+}
+
+#[test]
+fn pending_exchanges_are_bounded_per_source_in_every_mode() {
+    let world = fresh();
+    let desk = world.desk.clone().with_limits(DeskLimits {
+        pending_per_source: 2,
+        ..DeskLimits::default()
+    });
+    let from = |address: &str| Some(address.parse().unwrap());
+    let mut held = Vec::new();
+    for seed in 10..12 {
+        let mut responder = PairingResponder::new(
+            proven(&key(2), &key(seed), b""),
+            &world.store,
+            &desk,
+            from("192.0.2.1:1000"),
+        );
+        let mut joiner = Pairing::device("")
+            .join(proven(&key(seed), &key(2), b""))
+            .unwrap();
+        responder.receive(&joiner.transmit().unwrap()).unwrap();
+        held.push(responder);
+    }
+    let mut third = PairingResponder::new(
+        proven(&key(2), &key(12), b""),
+        &world.store,
+        &desk,
+        from("192.0.2.1:2000"),
+    );
+    let mut joiner = Pairing::device("")
+        .join(proven(&key(12), &key(2), b""))
+        .unwrap();
+    assert!(matches!(
+        third.receive(&joiner.transmit().unwrap()),
+        Err(PairingError::Refused(PairRefusal::Throttled))
+    ));
+    // Another source is not held back.
+    let mut elsewhere = PairingResponder::new(
+        proven(&key(2), &key(13), b""),
+        &world.store,
+        &desk,
+        from("192.0.2.2:1000"),
+    );
+    let mut joiner = Pairing::device("")
+        .join(proven(&key(13), &key(2), b""))
+        .unwrap();
+    assert!(elsewhere.receive(&joiner.transmit().unwrap()).is_ok());
+    // Ending one frees its place.
+    held.pop();
+    let mut fourth = PairingResponder::new(
+        proven(&key(2), &key(14), b""),
+        &world.store,
+        &desk,
+        from("192.0.2.1:3000"),
+    );
+    let mut joiner = Pairing::device("")
+        .join(proven(&key(14), &key(2), b""))
+        .unwrap();
+    assert!(fourth.receive(&joiner.transmit().unwrap()).is_ok());
+}

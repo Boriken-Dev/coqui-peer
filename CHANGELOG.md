@@ -43,6 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   `promote_successor` requires that unless `RotationOptions::allow_unproven`.
 - `pair::Channel::verified`: the device flow's joiner needs a channel that verified the
   responder (a pin, or roots), not only one that proved its key.
+- A responder's `deadline()` and `check_deadline()`: a stalled exchange ends after `pin_ttl`
+  or `device_ttl`. `DeskLimits::pending_per_source` (default 4) bounds pending exchanges per
+  source in every mode.
 - `Error::SuccessorTaken`: an accepted key cannot announce the pending successor of another.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).

@@ -36,7 +36,7 @@ pub use desk::{
     ShownPin, Ticket, Weakening,
 };
 
-use crate::clock::{from_unix_seconds, unix_seconds};
+use crate::clock::{from_unix_seconds, later, unix_seconds};
 use crate::error::Error;
 use crate::id::PeerId;
 use crate::key::KeyMaterial;
@@ -626,6 +626,7 @@ pub struct PairingResponder {
     joiner: Option<KeyMaterial>,
     mode: Option<Mode>,
     admission: Option<Admission>,
+    deadline: Option<SystemTime>,
     out: VecDeque<Vec<u8>>,
     state: Responding,
 }
@@ -657,6 +658,7 @@ impl PairingResponder {
             joiner: None,
             mode: None,
             admission: None,
+            deadline: None,
             out: VecDeque::new(),
             state: Responding::AwaitHello,
         }
@@ -712,6 +714,7 @@ impl PairingResponder {
     /// joiner) or the joiner did; [`PairingError::Protocol`]; [`PairingError::Local`] when the
     /// store or the random source fails. The exchange is over after an error.
     pub fn receive(&mut self, message: &[u8]) -> Result<(), PairingError> {
+        self.check_deadline()?;
         let result = self.step(message);
         if result.is_err() {
             self.state = Responding::Failed;
@@ -727,12 +730,43 @@ impl PairingResponder {
     /// As [`receive`](PairingResponder::receive); [`PairRefusal::Denied`] or
     /// [`PairRefusal::Expired`] when that is the decision.
     pub fn resume(&mut self, decision: Decision) -> Result<(), PairingError> {
+        self.check_deadline()?;
         let result = self.decide(decision);
         if result.is_err() {
             self.state = Responding::Failed;
             self.admission = None;
         }
         result
+    }
+
+    /// When this exchange must be over, on the desk's clock: from the joiner's first message,
+    /// [`PairingOptions::pin_ttl`] for a PIN and [`PairingOptions::device_ttl`] for the device
+    /// flow. `None` before that message, and for an invitation, which ends with it. A transport
+    /// reads with a timeout up to it, then calls [`check_deadline`](PairingResponder::check_deadline).
+    pub fn deadline(&self) -> Option<SystemTime> {
+        self.deadline
+    }
+
+    /// Ends the exchange once its [`deadline`](PairingResponder::deadline) passed: the joiner is
+    /// told `Expired`, and the slot or user code is released. [`receive`](PairingResponder::receive)
+    /// and [`resume`](PairingResponder::resume) check it first.
+    ///
+    /// # Errors
+    ///
+    /// [`PairRefusal::Expired`] when the deadline passed.
+    pub fn check_deadline(&mut self) -> Result<(), PairingError> {
+        if matches!(self.state, Responding::Complete | Responding::Failed) {
+            return Ok(());
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| self.desk.now() >= deadline)
+        {
+            self.state = Responding::Failed;
+            self.admission = None;
+            return Err(self.refuse(PairRefusal::Expired));
+        }
+        Ok(())
     }
 
     fn refuse(&mut self, refusal: PairRefusal) -> PairingError {
@@ -859,10 +893,16 @@ impl PairingResponder {
         if !enabled {
             return Err(self.refuse(PairRefusal::Disabled));
         }
-        let admission = match self.desk.admit() {
+        let admission = match self.desk.admit(self.source) {
             Ok(admission) => admission,
             Err(refusal) => return Err(self.refuse(refusal)),
         };
+        let ttl = match mode {
+            MODE_DEVICE => Some(options.device_ttl),
+            MODE_PIN_TYPED | MODE_PIN_SHOWN => Some(options.pin_ttl),
+            _ => None,
+        };
+        self.deadline = ttl.map(|ttl| later(self.desk.now(), ttl));
         match mode {
             MODE_INVITATION => {
                 let secret: [u8; 32] = reader

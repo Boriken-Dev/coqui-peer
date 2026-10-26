@@ -51,3 +51,17 @@ pub(crate) fn from_unix_seconds(seconds: u64) -> SystemTime {
         .checked_add(Duration::from_secs(seconds))
         .unwrap_or_else(|| UNIX_EPOCH + Duration::from_secs(u64::from(u32::MAX)))
 }
+
+/// `time` plus `by`, or the latest of `time` plus a century, a year, or nothing that the platform
+/// can hold: an option of `Duration::MAX` means "never" and must not overflow.
+pub(crate) fn later(time: SystemTime, by: Duration) -> SystemTime {
+    [
+        by,
+        Duration::from_secs(100 * 365 * 86_400),
+        Duration::from_secs(365 * 86_400),
+    ]
+    .into_iter()
+    .filter(|step| *step <= by)
+    .find_map(|step| time.checked_add(step))
+    .unwrap_or(time)
+}

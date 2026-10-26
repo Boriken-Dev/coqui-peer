@@ -220,7 +220,8 @@ pub struct PairingJoiner;      // transmit() -> Option<Vec<u8>>, receive(&[u8]) 
                                // shown() -> Option<&Shown>, is_complete(), finish() -> Result<Paired, PairingError>
 pub struct PairingResponder;   // new(Channel, &TrustStore, &PairingDesk, source: Option<SocketAddr>);
                                // transmit, receive, awaiting() -> Option<Ticket>, resume(Decision),
-                               // joiner() -> Option<&KeyMaterial>, is_complete(), finish()
+                               // joiner() -> Option<&KeyMaterial>, deadline() -> Option<SystemTime>,
+                               // check_deadline(), is_complete(), finish()
 #[non_exhaustive] pub enum Shown { Pin(PairingCode), UserCode { code: UserCode, expires: SystemTime } }
 pub struct Paired { pub peer: KeyMaterial, pub mode: Mode }
 #[non_exhaustive] pub enum Mode { Invitation, Pin, Device }
@@ -253,8 +254,9 @@ impl PairingDesk {
 pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub device: bool,
     pub pin_alphabet: CodeAlphabet, pub pin_ttl: Duration, pub pin_attempts: u32,
     pub user_code_alphabet: CodeAlphabet, pub device_ttl: Duration }   // Default: all on, 10 min, 1, 10 min
-pub struct DeskLimits { pub pending: usize, pub pin_runs_per_source: usize, pub wrong_codes_per_approver: usize,
-    pub approver_window: Duration, pub wrong_codes_total: usize, pub ipv6_prefix: u8 }  // Default: 32, 8, 5, 60 s, 60, 64
+pub struct DeskLimits { pub pending: usize, pub pending_per_source: usize, pub pin_runs_per_source: usize,
+    pub wrong_codes_per_approver: usize, pub approver_window: Duration, pub wrong_codes_total: usize,
+    pub ipv6_prefix: u8 }                       // Default: 32, 4, 8, 5, 60 s, 60, 64
 impl PairingOptions { pub fn check(&self) -> Result<(), Error>; pub fn weakened(&self) -> Vec<Weakening>; }
 impl DeskLimits { pub fn weakened(&self) -> Vec<Weakening>; }
 pub struct Weakening { pub setting: String, pub value: String, pub default: String }
@@ -313,7 +315,8 @@ is caught only through the keys it cannot replace.
 
 **Channels.** `verified` is the caller's statement that `remote` is the peer it meant (see the
 device flow); only the device flow reads it. `remote: Some` means the channel proved the other
-side holds that key (a TLS handshake does); every key the exchange carries must then equal it (`Protocol` otherwise).
+side holds that key (a TLS handshake does); every key the exchange carries must then equal it
+(`Protocol` otherwise).
 `None` takes the key from the exchange: the PIN confirmation still covers both keys, so a
 man in the middle cannot swap them without the PIN, but nothing proves either side holds its
 private key. `binding: Some` (coqui-peer-tls passes the RFC 8446 / RFC 5705 exporter, label
@@ -345,13 +348,21 @@ weaker than the default, and these are the costs:
 Only meaningless values are errors (`InvalidOptions`): an empty alphabet, a repeated or
 control character, length 0, zero TTL or attempts.
 
-**Throttles** (`DeskLimits`). At most `pending` exchanges at once (`Throttled`); at most
+**Throttles** (`DeskLimits`). At most `pending` exchanges at once, and `pending_per_source`
+from one source, in every mode (`Throttled`); at most
 `pin_runs_per_source` PIN runs per source (IPv4 address, or IPv6 prefix of `ipv6_prefix` bits)
 per `pin_ttl`; at most `wrong_codes_per_approver` wrong user codes per `approver` (any text the
 app uses: an account, a session) per `approver_window`, and `wrong_codes_total` from all per
 `device_ttl`. A throttled `find_device` is refused before matching. A code not of the alphabet
 is not counted. A desk with fewer free codes than pending device joiners refuses
 (`Throttled`).
+
+**Deadlines.** From the joiner's first message a responder has a `deadline()` on the desk's
+clock: `pin_ttl` for a PIN, `device_ttl` for the device flow (an invitation ends with that
+message). `receive` and `resume` refuse past it, and `check_deadline()` ends a stalled exchange
+(`Expired` to the joiner, its slot or code released). A transport reads with a timeout up to the
+deadline and calls `check_deadline` when it fires; before the first message the transport's
+own timeout applies (coqui-peer-tls: `PairConfig::timeout`).
 
 **Waiting.** A responder that waits for the operator returns its `Ticket` from `awaiting()`;
 drive it with `desk.wait(ticket)` (rechecks expiry every second on the system clock) or

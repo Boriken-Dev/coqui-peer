@@ -65,6 +65,9 @@ impl Default for PairingOptions {
 pub struct DeskLimits {
     /// Pairing exchanges in progress at once. Default 32.
     pub pending: usize,
+    /// Pairing exchanges in progress at once from one source (every mode). A source is an IPv4
+    /// address or an IPv6 prefix of [`ipv6_prefix`](DeskLimits::ipv6_prefix) bits. Default 4.
+    pub pending_per_source: usize,
     /// PIN runs one source may start per [`PairingOptions::pin_ttl`]. A source is an IPv4
     /// address or an IPv6 prefix of [`ipv6_prefix`](DeskLimits::ipv6_prefix) bits. Default 8.
     pub pin_runs_per_source: usize,
@@ -85,6 +88,7 @@ impl Default for DeskLimits {
     fn default() -> Self {
         Self {
             pending: 32,
+            pending_per_source: 4,
             pin_runs_per_source: 8,
             wrong_codes_per_approver: 5,
             approver_window: Duration::from_secs(60),
@@ -184,6 +188,11 @@ impl DeskLimits {
         let mut found = Vec::new();
         for (setting, value, standard) in [
             ("pending", self.pending, default.pending),
+            (
+                "pending_per_source",
+                self.pending_per_source,
+                default.pending_per_source,
+            ),
             (
                 "pin_runs_per_source",
                 self.pin_runs_per_source,
@@ -307,6 +316,7 @@ struct State {
     waiting: HashMap<u64, Waiting>,
     next: u64,
     pending: usize,
+    pending_by: HashMap<Option<IpAddr>, usize>,
     runs: HashMap<Option<IpAddr>, VecDeque<SystemTime>>,
     wrong_by: HashMap<String, VecDeque<SystemTime>>,
     wrong_all: VecDeque<SystemTime>,
@@ -343,6 +353,7 @@ pub struct PairingDesk {
 pub(crate) struct Admission {
     inner: Arc<Inner>,
     id: u64,
+    bucket: Option<IpAddr>,
 }
 
 impl Admission {
@@ -359,6 +370,12 @@ impl Drop for Admission {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         state.pending = state.pending.saturating_sub(1);
+        if let Some(count) = state.pending_by.get_mut(&self.bucket) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                state.pending_by.remove(&self.bucket);
+            }
+        }
         state.waiting.remove(&self.id);
         drop(state);
         self.inner.changed.notify_all();
@@ -431,6 +448,7 @@ impl PairingDesk {
                     waiting: HashMap::new(),
                     next: 0,
                     pending: 0,
+                    pending_by: HashMap::new(),
                     runs: HashMap::new(),
                     wrong_by: HashMap::new(),
                     wrong_all: VecDeque::new(),
@@ -691,16 +709,25 @@ impl PairingDesk {
         self.state().random.clone()
     }
 
-    pub(crate) fn admit(&self) -> Result<Admission, PairRefusal> {
+    /// The time on the desk's clock.
+    pub(crate) fn now(&self) -> SystemTime {
+        self.state().clock.now()
+    }
+
+    pub(crate) fn admit(&self, source: Option<SocketAddr>) -> Result<Admission, PairRefusal> {
         let mut state = self.state();
-        if state.pending >= state.limits.pending {
+        let bucket = source.map(|s| source_key(s.ip(), state.limits.ipv6_prefix));
+        let from_source = state.pending_by.get(&bucket).copied().unwrap_or(0);
+        if state.pending >= state.limits.pending || from_source >= state.limits.pending_per_source {
             return Err(PairRefusal::Throttled);
         }
         state.pending += 1;
+        *state.pending_by.entry(bucket).or_insert(0) += 1;
         state.next += 1;
         Ok(Admission {
             inner: self.inner.clone(),
             id: state.next,
+            bucket,
         })
     }
 
