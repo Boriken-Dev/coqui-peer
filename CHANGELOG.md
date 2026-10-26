@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `TrustStore::with_ipv6_prefix(bits)`: the IPv6 prefix length waiting sources are grouped
   by, 64 by default.
+- `complete_stream` and `complete_messages` (and their `asynch` forms): the loops of
+  `drive_stream` and `drive_messages` that return the completed handshake instead of calling
+  `finish`, for a method whose outcome has no verified peer to report, such as a TLS server
+  that leaves client authentication to the application. `drive_*` are unchanged in
+  behaviour and now call them.
 
 ### Changed
 

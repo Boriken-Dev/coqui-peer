@@ -114,9 +114,12 @@ pub trait Method {
 pub trait MessageTransport { fn send(&mut self, &[u8]) -> io::Result<()>; fn recv(&mut self) -> io::Result<Vec<u8>>; }
 pub fn drive_stream<H: Handshake, T: Read + Write>(H, &mut T) -> Result<Established<H::Output>, DriveError<H::Error>>;
 pub fn drive_messages<H: Handshake, T: MessageTransport>(H, &mut T) -> Result<Established<H::Output>, DriveError<H::Error>>;
+pub fn complete_stream<H: Handshake, T: Read + Write>(H, &mut T) -> Result<H, DriveError<H::Error>>;
+pub fn complete_messages<H: Handshake, T: MessageTransport>(H, &mut T) -> Result<H, DriveError<H::Error>>;
 pub enum DriveError<E> { Io(io::Error), Handshake(E), TooLong }
 pub const MAX_MESSAGE: usize = 1 << 20;
-// feature tokio, module asynch: MessageTransport (async fns), drive_stream, drive_messages
+// feature tokio, module asynch: MessageTransport (async fns), drive_stream, drive_messages,
+// complete_stream, complete_messages
 ```
 
 The handshake does no I/O; the caller owns the transport. `Stream` handshakes treat input as
@@ -126,6 +129,13 @@ bytes (chunks may split or join); `Message` handshakes get exactly one message p
 use it only with a reliable, ordered transport. `finish` before `is_complete` is an error;
 bytes received past the end of the handshake stay in `Output`. `Output` is `()` for a method
 that only authenticates, session keys, or an encrypted channel.
+
+`complete_stream` / `complete_messages` run the same loop and return the handshake once
+`is_complete`, everything it queued sent, without calling `finish`: for a method with a finish
+of its own, such as a TLS server that does not authenticate its client at that layer and so
+has no `PeerId` to put in `Established` (`coqui-peer-tls`'s `TlsHandshake::finish_unauthenticated`).
+`drive_*` is `complete_*` followed by `finish`. `is_complete` says the exchange is over;
+`finish` succeeds when the method verified a peer.
 
 ## Errors
 

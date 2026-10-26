@@ -38,7 +38,7 @@ cargo add coqui-peer --git https://github.com/Boriken-Dev/coqui-peer
 | Feature | Adds | Needed for |
 | --- | --- | --- |
 | `serde` | `serde` | reading and writing `PeerId` and `Digest` as text, in the format you choose |
-| `tokio` | `tokio` (`io-util`) | `asynch::drive_stream`, `asynch::drive_messages` |
+| `tokio` | `tokio` (`io-util`) | `asynch::drive_stream`, `asynch::drive_messages`, `asynch::complete_stream`, `asynch::complete_messages` |
 
 ## Quick start
 
@@ -82,6 +82,7 @@ wants TOML or JSON reads them with its own `toml` or `serde_json`.
 | `KeyMaterial` | `method`, PEM `label` and `bytes` kept by the store. |
 | `Handshake`, `Method`, `Established`, `Framing` | The sans-IO trait. |
 | `drive_stream`, `drive_messages`, `MessageTransport`, `asynch::*` | Loops over a transport. |
+| `complete_stream`, `complete_messages` | The same loops, returning the completed handshake for a method-specific finish. |
 
 ## Development
 
