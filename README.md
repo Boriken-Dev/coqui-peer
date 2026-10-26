@@ -26,6 +26,10 @@ See the [documentation](https://boriken-dev.github.io/coqui-peer/).
   successor is promoted once proven, and the old key retires after a window you choose.
 - **A key-proof contract** — a peer is recorded as waiting only after it proved it holds the
   key it presented. Every method must meet it; it is documented on `TrustStore`.
+- **Pairing** — a joiner and a responder come to accept each other's keys by an invitation,
+  a short PIN checked by SPAKE2 (feature `pin`), or an RFC 8628-style device flow. Sans-IO over
+  any channel; codes, pending joiners and decisions are data your app shows and acts on, and
+  every limit is an option with a default.
 - **A sans-IO `Handshake`** — the caller feeds received bytes or messages in and gets bytes or
   messages out, so a method runs over a byte stream, WebSocket messages, datagrams or shared
   memory. Blocking helpers are included; async ones come with the `tokio` feature.
@@ -42,7 +46,7 @@ cargo add coqui-peer --git https://github.com/Boriken-Dev/coqui-peer
 | --- | --- | --- |
 | `serde` | `serde` | reading and writing `PeerId` and `Digest` as text, in the format you choose |
 | `tokio` | `tokio` (`io-util`) | `asynch::drive_stream`, `asynch::drive_messages`, `asynch::complete_stream`, `asynch::complete_messages` |
-| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` | `Random::os` |
+| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` | PIN pairing (`Pairing::pin`), `Random::os` |
 
 ## Quick start
 
@@ -85,6 +89,7 @@ wants TOML or JSON reads them with its own `toml` or `serde_json`.
 | `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits` | Pairing store on disk. |
 | `Invitation`, `InvitationOptions`, `RotationOptions`, `RotationEvent` | Invitations and successor keys in the store. |
 | `Clock`, `Random` | The wall clock and secure random source you pass in. |
+| `pair::{Pairing, PairingResponder, PairingDesk, ...}` | The pairing exchange and the responder's desk. |
 | `KeyMaterial` | `method`, PEM `label` and `bytes` kept by the store. |
 | `Handshake`, `Method`, `Established`, `Framing` | The sans-IO trait. |
 | `drive_stream`, `drive_messages`, `MessageTransport`, `asynch::*` | Loops over a transport. |
