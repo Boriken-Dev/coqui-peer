@@ -372,8 +372,9 @@ material, secrets or paths.
 For peers in other languages. UTF-8, LF. Under `<state_dir>/peers/`: `accepted/`, `waiting/`
 and `successors/` hold `<64 lowercase hex>.pem`, the name being the SHA-256 id of the key bytes
 (no `sha256:` prefix: `:` is not valid in Windows file names); `invitations/` holds
-`<64 lowercase hex>.inv`, named by the SHA-256 of the secret. A key file is header lines, then
-one PEM block:
+`<64 lowercase hex>.inv`, named by the SHA-256 of the secret. A revoked invitation leaves
+`<64 lowercase hex>.revoked` (empty), which refuses redemptions still in flight. A key file
+is header lines, then one PEM block:
 
 ```text
 Source: 192.0.2.7:4000        waiting files only, optional; IPv6 as [addr]:port

@@ -582,3 +582,46 @@ fn a_retired_key_that_pairs_again_is_accepted_again() {
         Err(Error::AlreadyAccepted)
     ));
 }
+
+#[test]
+fn a_revocation_wins_over_redemptions_in_flight() {
+    let (_directory, store) = store();
+    let options = InvitationOptions {
+        uses: 1_000_000,
+        ..InvitationOptions::default()
+    };
+    for round in 0..20 {
+        let random = counting();
+        // A different secret each round: skip the bytes earlier rounds drew.
+        for _ in 0..round {
+            random.fill(&mut [0u8; 32]).unwrap();
+        }
+        let invitation = store.invite(&random, options, "").unwrap();
+        let wins = std::sync::atomic::AtomicUsize::new(0);
+        std::thread::scope(|scope| {
+            for _ in 0..4 {
+                scope.spawn(|| {
+                    for _ in 0..300 {
+                        if store.redeem(&invitation.secret).is_ok() {
+                            wins.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+            // Revoke while redemptions run; the spin is bounded so a lost invitation cannot
+            // hang the test.
+            for _ in 0..1_000_000 {
+                if wins.load(Ordering::SeqCst) >= 3 {
+                    break;
+                }
+                std::thread::yield_now();
+            }
+            store.revoke_invitation(&invitation.id()).unwrap();
+        });
+        assert!(
+            matches!(store.redeem(&invitation.secret), Err(Error::NotInvited)),
+            "round {round}"
+        );
+        assert!(store.invitations().unwrap().is_empty(), "round {round}");
+    }
+}

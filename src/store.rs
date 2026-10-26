@@ -619,6 +619,10 @@ impl TrustStore {
             .as_deref()
             .and_then(parse_invitation)
             .ok_or(Error::NotInvited)?;
+        let revoked = self.revoked_path(&InvitationId::of(secret));
+        if revoked.exists() {
+            return Err(Error::NotInvited);
+        }
         if self.clock.now() >= from_unix_seconds(expires) {
             return Err(Error::Expired);
         }
@@ -629,6 +633,12 @@ impl TrustStore {
                 &path,
                 &invitation_text(from_unix_seconds(expires), left, &label),
             );
+            // A revocation that came while the file was claimed wins: either it sees this
+            // file and removes it, or this sees its record and does.
+            if revoked.exists() {
+                let _ = fs::remove_file(&path);
+                return Err(Error::NotInvited);
+            }
         }
         Ok(Invitation {
             secret: *secret,
@@ -680,12 +690,21 @@ impl TrustStore {
         Ok(found)
     }
 
-    /// Revokes an open invitation; `true` when it existed.
+    /// Revokes an invitation; `true` when it was open. A redemption in flight when it is
+    /// revoked fails, and its remaining uses are not restored: a `<64 hex>.revoked` file
+    /// records the revocation before the invitation file goes.
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] when its file cannot be removed.
+    /// [`Error::Io`] when the revocation cannot be recorded or the file removed.
     pub fn revoke_invitation(&self, id: &InvitationId) -> Result<bool, Error> {
+        fs::create_dir_all(self.root.join("invitations")).map_err(Error::Io)?;
+        OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.revoked_path(id))
+            .map_err(Error::Io)?;
         match fs::remove_file(self.invitation_path(id)) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -919,6 +938,12 @@ impl TrustStore {
 
     fn path(&self, section: &str, id: &PeerId) -> PathBuf {
         self.root.join(section).join(format!("{}.pem", id.hex()))
+    }
+
+    fn revoked_path(&self, id: &InvitationId) -> PathBuf {
+        self.root
+            .join("invitations")
+            .join(format!("{}.revoked", id.hex()))
     }
 
     fn invitation_path(&self, id: &InvitationId) -> PathBuf {

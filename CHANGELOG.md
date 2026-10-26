@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   Message vectors in `tests/vectors/pair/`.
 - Accepting a key past its retirement time (`accept`, `accept_key`, and so a new pairing)
   makes it current again.
+- `revoke_invitation` wins over redemptions in flight: a `.revoked` record refuses them and
+  keeps their remaining uses from being restored.
 - `Error::SuccessorTaken`: an accepted key cannot announce the pending successor of another.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).
