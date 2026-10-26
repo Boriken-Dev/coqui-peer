@@ -19,6 +19,9 @@ default = []
 serde = ["dep:serde"]
 # Async helpers that drive a handshake over tokio streams and message transports.
 tokio = ["dep:tokio"]
+# PIN pairing: SPAKE2 with key confirmation (spake2, hkdf, hmac), and `Random::os` (rand_core,
+# which spake2 already uses, reading the operating system's generator).
+pin = ["dep:spake2", "dep:hkdf", "dep:hmac", "dep:rand_core"]
 
 [dependencies]
 data-encoding = { version = "2", default-features = false, features = ["alloc"] }
@@ -27,6 +30,10 @@ sha2 = { version = "0.11.1", default-features = false }
 subtle = "2.6"
 serde = { version = "1", default-features = false, features = ["derive", "std"], optional = true }
 tokio = { version = "1", default-features = false, features = ["io-util"], optional = true }
+spake2 = { version = "0.4", optional = true }
+hkdf = { version = "0.13", optional = true }
+hmac = { version = "0.13", optional = true }
+rand_core = { version = "0.6", default-features = false, features = ["getrandom"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

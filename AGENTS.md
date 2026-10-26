@@ -9,6 +9,7 @@ package and is self-contained. Development documentation lives with the source a
 | --- | --- | --- |
 | `serde` | `Serialize`/`Deserialize` for `PeerId` and `Digest` as text | off |
 | `tokio` | `tokio` (`io-util`): module `asynch` | off |
+| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`): `Random::os` | off |
 
 MSRV Rust 1.89. A default build depends on `sha1`, `sha2`, `subtle` and `data-encoding`. No
 `unsafe` code. No TLS, no crypto transport, no process-global state; nothing reads a file or
@@ -60,21 +61,48 @@ pub const MAX_KEY_BYTES: usize = 65536;
 pub struct TrustStore;                     // Clone
 pub struct WaitingLimits { pub per_source: usize, pub total: usize, pub rerecord: Duration }   // Default: 16, 1000, 60 s
 pub struct WaitingEntry { pub id: PeerId, pub source: Option<SocketAddr> }
-pub const FORMAT_VERSION: u32 = 3;
+pub const FORMAT_VERSION: u32 = 4;
 impl TrustStore {
     pub fn open(state_dir: &Path) -> Result<TrustStore, Error>;        // creates <state_dir>/peers/{accepted,waiting}
     pub fn with_limits(self, limits: WaitingLimits) -> TrustStore;
     pub fn with_ipv6_prefix(self, bits: u8) -> TrustStore;            // default 64; above 128 is 128
+    pub fn with_clock(self, clock: Clock) -> TrustStore;              // default Clock::system()
+    pub fn with_rotation(self, options: RotationOptions) -> TrustStore;
+    pub fn rotation(&self) -> RotationOptions;   pub fn clock(&self) -> &Clock;
     pub fn waiting(&self) -> Result<Vec<WaitingEntry>, Error>;
-    pub fn accepted(&self) -> Result<Vec<PeerId>, Error>;
-    pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial>;
+    pub fn accepted(&self) -> Result<Vec<PeerId>, Error>;             // retired keys not listed
+    pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial>;   // None once retired
     pub fn waiting_key(&self, id: &PeerId) -> Option<KeyMaterial>;
     pub fn accept(&self, id: &PeerId) -> Result<(), Error>;             // waiting -> accepted
     pub fn accept_key(&self, key: &KeyMaterial) -> Result<PeerId, Error>;
-    pub fn remove(&self, id: &PeerId) -> Result<bool, Error>;
-    pub fn is_accepted(&self, id: &PeerId) -> bool;
+    pub fn remove(&self, id: &PeerId) -> Result<bool, Error>;         // also its pending successor
+    pub fn is_accepted(&self, id: &PeerId) -> bool;                   // false from Retires on
     pub fn record_waiting(&self, key: &KeyMaterial, source: Option<SocketAddr>);
+    // invitations
+    pub fn invite(&self, random: &Random, options: InvitationOptions, label: &str) -> Result<Invitation, Error>;
+    pub fn redeem(&self, secret: &[u8; 32]) -> Result<Invitation, Error>;   // uses one; atomic
+    pub fn invitations(&self) -> Result<Vec<InvitationEntry>, Error>;
+    pub fn revoke_invitation(&self, id: &InvitationId) -> Result<bool, Error>;
+    // rotation
+    pub fn announce_successor(&self, old: &PeerId, new: &KeyMaterial) -> Result<(), Error>;
+    pub fn successor_key(&self, new: &PeerId) -> Option<KeyMaterial>;
+    pub fn promote_successor(&self, new: &PeerId) -> Result<PeerId, Error>; // returns old
+    pub fn successors(&self) -> Result<Vec<Successor>, Error>;
+    pub fn retiring(&self) -> Result<Vec<Retiring>, Error>;
+    pub fn take_rotation_events(&self) -> Vec<RotationEvent>;
 }
+pub struct InvitationOptions { pub valid_for: Duration, pub uses: u32 }        // Default: 24 h, 1
+pub struct Invitation { pub secret: [u8; 32], pub expires: SystemTime, pub uses: u32, pub label: String }
+impl Invitation { pub fn id(&self) -> InvitationId; }                           // Debug hides the secret
+pub struct InvitationId;   // Copy, Ord, Display/FromStr = 64 hex; InvitationId::of(&secret) = SHA-256
+pub struct InvitationEntry { pub id: InvitationId, pub expires: SystemTime, pub uses: u32, pub label: String }
+pub const MAX_LABEL: usize = 128;
+pub struct RotationOptions { pub retire_after: Duration, pub require_approval: bool }  // Default: 24 h, false
+pub struct Successor { pub old: PeerId, pub new: PeerId }
+pub struct Retiring { pub id: PeerId, pub successor: Option<PeerId>, pub retires: SystemTime }
+#[non_exhaustive] pub enum RotationEvent { Announced { old, new }, Promoted { old, new, retires } }
+pub struct Clock;    // Clone; Clock::system(), Clock::from_fn(|| SystemTime), now()
+pub struct Random;   // Clone; Random::from_fn(|&mut [u8]| -> Result<(), Error>), fill(); feature pin: Random::os()
 ```
 
 **Key-proof contract (every method must meet it).** `record_waiting` is called only after the
@@ -91,6 +119,29 @@ its IPv4 address) or an IPv6 prefix of `with_ipv6_prefix` bits, /64 by default, 
 holder controls every address of a /64; 128 counts each IPv6 address alone. The full address
 is still stored with the entry. `None` sources share one bucket. `is_accepted` and the `*_key`
 readers check that the stored bytes hash to the id.
+
+**Invitations.** `invite` draws a 32-byte secret from `random` and writes only its SHA-256
+(the `InvitationId`), its expiry, uses and label: the caller hands the secret to the joiner
+with the inviter's id, and the store cannot leak it. `redeem` claims the file by renaming it,
+so of concurrent redemptions of a single-use invitation exactly one wins; it returns the uses
+left after it and removes the file at 0. Errors: `NotInvited` (unknown, used up, revoked),
+`Expired` (the file is removed). `InvalidOptions` only for meaningless values: zero uses or
+validity, a label that is not one line of at most `MAX_LABEL` bytes without surrounding
+spaces. `valid_for` is counted in whole seconds; longer ones and more uses are the caller's
+choice and only widen who may redeem it.
+
+**Rotation.** `announce_successor(old, new)` is for a key the holder of `old` sent over a
+session `old` authenticated; `old` must be accepted and not retiring (`NotAccepted`), `new`
+not accepted (`AlreadyAccepted`) and not `old` (`Material`); a later announcement replaces the
+pending one. A method calls `promote_successor(new)` once the peer proves `new` in a handshake,
+unless `RotationOptions::require_approval` (then the caller calls it to approve). Promotion
+accepts `new` and gives `old` `Retires: now + retire_after`; from then on `is_accepted(old)`,
+`accepted_key(old)` and `accepted()` drop it. `retire_after` zero cuts the old key off at
+once (connections still on it fail their next handshake); a longer one keeps a possibly stolen
+old key usable that much longer. `successor_key(new)` is `Some` only while `old` is accepted, not
+retiring and names `new`. `remove(old)` deletes its pending successor. Events are returned, not
+reported: `take_rotation_events` drains this process's queue (at most 1024, oldest dropped);
+`successors()` and `retiring()` read the state on disk.
 
 ## Handshake, Method, drivers
 
@@ -140,25 +191,43 @@ has no `PeerId` to put in `Established` (`coqui-peer-tls`'s `TlsHandshake::finis
 ## Errors
 
 `Error` (non-exhaustive): `InvalidId`, `WeakDigest`, `UnknownDigest(String)`, `Material`,
-`NotWaiting`, `AlreadyAccepted`, `Io(io::Error)`. `Display` never includes key material or
-paths.
+`NotWaiting`, `AlreadyAccepted`, `NotAccepted`, `NoSuccessor`, `NotInvited`, `Expired`,
+`InvalidOptions`, `InvalidCode`, `Random`, `Io(io::Error)`. `Display` never includes key
+material, secrets or paths.
 
-## On-disk store format (version 3)
+## On-disk store format (version 4)
 
-For peers in other languages. UTF-8, LF. Under `<state_dir>/peers/`: `accepted/<64 lowercase hex>.pem`
-and `waiting/<64 lowercase hex>.pem`, the name being the SHA-256 id of the key bytes (no `sha256:`
-prefix: `:` is not valid in Windows file names). A file is header lines, then one PEM block:
+For peers in other languages. UTF-8, LF. Under `<state_dir>/peers/`: `accepted/`, `waiting/`
+and `successors/` hold `<64 lowercase hex>.pem`, the name being the SHA-256 id of the key bytes
+(no `sha256:` prefix: `:` is not valid in Windows file names); `invitations/` holds
+`<64 lowercase hex>.inv`, named by the SHA-256 of the secret. A key file is header lines, then
+one PEM block:
 
 ```text
 Source: 192.0.2.7:4000        waiting files only, optional; IPv6 as [addr]:port
+Predecessor: <64 hex>         successors/ only: the accepted key that announced it
 Method: tls                   the method name
+Successor: <64 hex>           accepted only, optional: announced (pending) or promoted successor
+Retires: 1800086400           accepted only, optional: unix seconds; refused from then on
 -----BEGIN CERTIFICATE-----   the label the method chose
 ...base64 of the key bytes, 64-character lines...
 -----END CERTIFICATE-----
 ```
 
+A successor is pending while `successors/<new>.pem` names the accepted key and that key's
+`Successor:` names it back without a `Retires:` line. An invitation file is header lines only,
+never the secret:
+
+```text
+Expires: 1800086400           unix seconds
+Uses: 2                       redemptions left, at least 1
+Label: kitchen tablet         optional, one line
+```
+
 Files without `Method:` (versions 1 and 2) read as `tls`; version 1 files have no `Source:`
 and may be named by the grouped base32 spelling, which is also read. Accepting rewrites a
-waiting file without `Source:`. Vectors: `tests/vectors/store-v{1,2,3}`, `*.fingerprint`
-(canonical, bare hex, grouped base32), `example-key.id`, checked by `tests/vectors.rs`.
-Format changes bump the version and the changelog; older versions stay readable.
+waiting file without `Source:`. A version 3 store is a version 4 store with none of the new
+lines or directories. Vectors: `tests/vectors/store-v{1,2,3,4}`, `*.fingerprint` (canonical,
+bare hex, grouped base32), `example-key.id`, checked by `tests/vectors.rs`; `store-v4` is
+written at unix time 1800000000 with the invitation secret `0x40..=0x5f`. Format changes bump
+the version and the changelog; older versions stay readable.

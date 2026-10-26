@@ -1,10 +1,15 @@
 //! The waiting queue is bounded per source, remembers the source, and keeps each method's
-//! key material as given.
+//! key material as given; invitations redeem once, and successor keys replace accepted ones.
 
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, UNIX_EPOCH};
 
-use coqui_peer::{Error, KeyMaterial, TrustStore, WaitingLimits};
+use coqui_peer::{
+    Clock, Error, InvitationOptions, KeyMaterial, PeerId, Random, Retiring, RotationEvent,
+    RotationOptions, Successor, TrustStore, WaitingLimits,
+};
 
 fn store() -> (tempfile::TempDir, TrustStore) {
     let directory = tempfile::tempdir().unwrap();
@@ -240,4 +245,283 @@ fn the_ipv6_prefix_is_configurable() {
         record(&store, &key("example", seed), source);
     }
     assert_eq!(store.waiting().unwrap().len(), 2);
+}
+
+/// A clock the test moves by hand, in seconds since the Unix epoch.
+#[derive(Clone)]
+struct Hand(Arc<AtomicU64>);
+
+impl Hand {
+    fn at(seconds: u64) -> Self {
+        Self(Arc::new(AtomicU64::new(seconds)))
+    }
+
+    fn clock(&self) -> Clock {
+        let now = self.0.clone();
+        Clock::from_fn(move || UNIX_EPOCH + Duration::from_secs(now.load(Ordering::SeqCst)))
+    }
+
+    fn advance(&self, seconds: u64) {
+        self.0.fetch_add(seconds, Ordering::SeqCst);
+    }
+}
+
+/// A deterministic source, for tests only: a counter.
+fn counting() -> Random {
+    let next = Arc::new(AtomicU64::new(1));
+    Random::from_fn(move |out| {
+        for byte in out {
+            *byte = next.fetch_add(1, Ordering::SeqCst) as u8;
+        }
+        Ok(())
+    })
+}
+
+const T0: u64 = 1_800_000_000;
+
+#[test]
+fn an_invitation_redeems_once() {
+    let (directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store.with_clock(hand.clock());
+    let invitation = store
+        .invite(&counting(), InvitationOptions::default(), "kitchen tablet")
+        .unwrap();
+    assert_eq!(invitation.uses, 1);
+    assert_eq!(
+        invitation.expires,
+        UNIX_EPOCH + Duration::from_secs(T0 + 24 * 3600)
+    );
+    let listed = store.invitations().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, invitation.id());
+    assert_eq!(listed[0].label, "kitchen tablet");
+    // The secret is not written anywhere in the store.
+    let text = std::fs::read_to_string(
+        directory
+            .path()
+            .join(format!("peers/invitations/{}.inv", invitation.id())),
+    )
+    .unwrap();
+    assert!(!text.contains(&PeerId::from_bytes(invitation.secret).hex()));
+
+    let redeemed = store.redeem(&invitation.secret).unwrap();
+    assert_eq!(redeemed.uses, 0);
+    assert_eq!(redeemed.label, "kitchen tablet");
+    assert!(matches!(
+        store.redeem(&invitation.secret),
+        Err(Error::NotInvited)
+    ));
+    assert!(store.invitations().unwrap().is_empty());
+    assert!(matches!(store.redeem(&[9; 32]), Err(Error::NotInvited)));
+}
+
+#[test]
+fn an_invitation_with_uses_counts_them_down() {
+    let (_directory, store) = store();
+    let options = InvitationOptions {
+        uses: 2,
+        ..InvitationOptions::default()
+    };
+    let invitation = store.invite(&counting(), options, "").unwrap();
+    assert_eq!(store.redeem(&invitation.secret).unwrap().uses, 1);
+    assert_eq!(store.invitations().unwrap()[0].uses, 1);
+    assert_eq!(store.redeem(&invitation.secret).unwrap().uses, 0);
+    assert!(store.redeem(&invitation.secret).is_err());
+}
+
+#[test]
+fn concurrent_redemptions_of_one_use_succeed_once() {
+    let (_directory, store) = store();
+    let invitation = store
+        .invite(&counting(), InvitationOptions::default(), "")
+        .unwrap();
+    let wins: usize = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| store.redeem(&invitation.secret).is_ok()))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| usize::from(handle.join().unwrap()))
+            .sum()
+    });
+    assert_eq!(wins, 1);
+}
+
+#[test]
+fn an_expired_invitation_is_refused_and_removed() {
+    let (_directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store.with_clock(hand.clock());
+    let options = InvitationOptions {
+        valid_for: Duration::from_secs(600),
+        uses: 1,
+    };
+    let invitation = store.invite(&counting(), options, "").unwrap();
+    hand.advance(599);
+    assert_eq!(store.invitations().unwrap().len(), 1);
+    hand.advance(1);
+    assert!(matches!(
+        store.redeem(&invitation.secret),
+        Err(Error::Expired)
+    ));
+    assert!(store.invitations().unwrap().is_empty());
+}
+
+#[test]
+fn a_revoked_invitation_cannot_be_redeemed() {
+    let (_directory, store) = store();
+    let invitation = store
+        .invite(&counting(), InvitationOptions::default(), "")
+        .unwrap();
+    assert!(store.revoke_invitation(&invitation.id()).unwrap());
+    assert!(!store.revoke_invitation(&invitation.id()).unwrap());
+    assert!(matches!(
+        store.redeem(&invitation.secret),
+        Err(Error::NotInvited)
+    ));
+}
+
+#[test]
+fn meaningless_invitation_options_are_errors() {
+    let (_directory, store) = store();
+    let zero_uses = InvitationOptions {
+        uses: 0,
+        ..InvitationOptions::default()
+    };
+    let zero_time = InvitationOptions {
+        valid_for: Duration::ZERO,
+        ..InvitationOptions::default()
+    };
+    for (options, label) in [
+        (zero_uses, ""),
+        (zero_time, ""),
+        (InvitationOptions::default(), "two\nlines"),
+        (InvitationOptions::default(), " padded"),
+    ] {
+        assert!(matches!(
+            store.invite(&counting(), options, label),
+            Err(Error::InvalidOptions)
+        ));
+    }
+}
+
+#[test]
+fn a_successor_is_promoted_and_the_old_key_retires() {
+    let (_directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store.with_clock(hand.clock());
+    let (old, new) = (key("example", 1), key("example", 2));
+    store.accept_key(&old).unwrap();
+    assert!(store.successor_key(&new.id()).is_none());
+    store.announce_successor(&old.id(), &new).unwrap();
+    assert_eq!(store.successor_key(&new.id()), Some(new.clone()));
+    assert!(!store.is_accepted(&new.id()));
+    assert_eq!(
+        store.successors().unwrap(),
+        [Successor {
+            old: old.id(),
+            new: new.id()
+        }]
+    );
+
+    assert_eq!(store.promote_successor(&new.id()).unwrap(), old.id());
+    assert!(store.is_accepted(&new.id()));
+    assert!(store.is_accepted(&old.id()));
+    assert!(store.successors().unwrap().is_empty());
+    let retires = UNIX_EPOCH + Duration::from_secs(T0 + 24 * 3600);
+    assert_eq!(
+        store.retiring().unwrap(),
+        [Retiring {
+            id: old.id(),
+            successor: Some(new.id()),
+            retires
+        }]
+    );
+    assert_eq!(
+        store.take_rotation_events(),
+        [
+            RotationEvent::Announced {
+                old: old.id(),
+                new: new.id()
+            },
+            RotationEvent::Promoted {
+                old: old.id(),
+                new: new.id(),
+                retires
+            }
+        ]
+    );
+    assert!(store.take_rotation_events().is_empty());
+
+    hand.advance(24 * 3600 - 1);
+    assert!(store.is_accepted(&old.id()));
+    hand.advance(1);
+    assert!(!store.is_accepted(&old.id()));
+    assert!(store.accepted_key(&old.id()).is_none());
+    assert_eq!(store.accepted().unwrap(), [new.id()]);
+    // A retiring key announces nothing.
+    assert!(matches!(
+        store.announce_successor(&old.id(), &key("example", 3)),
+        Err(Error::NotAccepted)
+    ));
+}
+
+#[test]
+fn the_retire_window_is_an_option() {
+    let (_directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store
+        .with_clock(hand.clock())
+        .with_rotation(RotationOptions {
+            retire_after: Duration::ZERO,
+            require_approval: true,
+        });
+    assert!(store.rotation().require_approval);
+    let (old, new) = (key("example", 1), key("example", 2));
+    store.accept_key(&old).unwrap();
+    store.announce_successor(&old.id(), &new).unwrap();
+    store.promote_successor(&new.id()).unwrap();
+    assert!(!store.is_accepted(&old.id()));
+    assert!(store.is_accepted(&new.id()));
+}
+
+#[test]
+fn removing_a_key_drops_its_pending_successor() {
+    let (directory, store) = store();
+    let (old, new) = (key("example", 1), key("example", 2));
+    store.accept_key(&old).unwrap();
+    store.announce_successor(&old.id(), &new).unwrap();
+    assert!(store.remove(&old.id()).unwrap());
+    assert!(store.successor_key(&new.id()).is_none());
+    assert!(store.successors().unwrap().is_empty());
+    assert!(
+        !directory
+            .path()
+            .join(format!("peers/successors/{}.pem", new.id().hex()))
+            .exists()
+    );
+    assert!(matches!(
+        store.promote_successor(&new.id()),
+        Err(Error::NoSuccessor)
+    ));
+}
+
+#[test]
+fn a_new_announcement_replaces_the_pending_successor() {
+    let (_directory, store) = store();
+    let (old, first, second) = (key("example", 1), key("example", 2), key("example", 3));
+    store.accept_key(&old).unwrap();
+    store.announce_successor(&old.id(), &first).unwrap();
+    store.announce_successor(&old.id(), &second).unwrap();
+    assert!(store.successor_key(&first.id()).is_none());
+    assert_eq!(store.successor_key(&second.id()), Some(second));
+    assert!(matches!(
+        store.announce_successor(&key("example", 9).id(), &first),
+        Err(Error::NotAccepted)
+    ));
+    assert!(matches!(
+        store.announce_successor(&old.id(), &old),
+        Err(Error::Material)
+    ));
 }

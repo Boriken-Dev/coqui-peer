@@ -30,8 +30,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   that leaves client authentication to the application. `drive_*` are unchanged in
   behaviour and now call them.
 
+- Invitations in the `TrustStore`: `invite` (a 32-byte secret from a caller-supplied
+  `Random`, `InvitationOptions` for validity and uses), `redeem` (atomic, one use at a time),
+  `invitations` and `revoke_invitation`. The store keeps only the SHA-256 of the secret.
+- Key rotation in the `TrustStore`: `announce_successor`, `successor_key`, `promote_successor`,
+  `successors`, `retiring` and `take_rotation_events`, with `RotationOptions` (retire window,
+  default 24 hours; `require_approval`). A promoted key's predecessor is refused from its
+  retirement time on.
+- `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
+  secure random source; `Random::os` with the new `pin` feature).
+- `Error::{NotAccepted, NoSuccessor, NotInvited, Expired, InvalidOptions, InvalidCode, Random}`.
+
 ### Changed
 
+- On-disk store format version 4: `successors/` and `invitations/` directories, and
+  `Successor:` / `Retires:` header lines in accepted files. Versions 1 to 3 still read; a
+  version 3 store is a version 4 store with none of the new lines.
 - The per-source waiting limits (`per_source`, `rerecord`) count an IPv6 source by its /64
   prefix, not by address, so one subnet's holder can no longer fill the queue from many
   addresses. IPv4 sources still count per address, and an IPv4-mapped IPv6 address counts as

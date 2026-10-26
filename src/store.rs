@@ -1,17 +1,29 @@
 use std::collections::{HashMap, VecDeque};
+use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use sha2::{Digest as _, Sha256};
+
+use crate::clock::{Clock, from_unix_seconds, unix_seconds};
 use crate::error::Error;
 use crate::id::PeerId;
 use crate::key::{KeyMaterial, decode_pem, encode_pem};
+use crate::random::Random;
 
-/// The version of the on-disk format [`TrustStore`] writes. Versions 1 and 2 stay readable.
-pub const FORMAT_VERSION: u32 = 3;
+/// The version of the on-disk format [`TrustStore`] writes. Versions 1 to 3 stay readable.
+pub const FORMAT_VERSION: u32 = 4;
+
+/// The longest invitation label, in bytes.
+pub const MAX_LABEL: usize = 128;
+
+/// Rotation events kept for [`TrustStore::take_rotation_events`]; older ones are dropped.
+const MAX_EVENTS: usize = 1024;
 
 /// The method of a file that has no `Method:` line: files of versions 1 and 2 only held
 /// certificates.
@@ -19,7 +31,7 @@ const LEGACY_METHOD: &str = "tls";
 
 /// The IPv6 prefix length a waiting source is grouped by, unless the store is given another:
 /// one /64 is the usual end-site subnet, and its holder can use any address in it.
-const DEFAULT_IPV6_PREFIX: u8 = 64;
+pub(crate) const DEFAULT_IPV6_PREFIX: u8 = 64;
 
 /// Bounds on the waiting queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +55,44 @@ impl Default for WaitingLimits {
     }
 }
 
+/// How an accepted peer's key is replaced by its successor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RotationOptions {
+    /// How long the old key stays accepted once its successor is promoted. Default 24 hours.
+    pub retire_after: Duration,
+    /// Whether a successor waits for [`TrustStore::promote_successor`] instead of being
+    /// promoted by the method the first time the peer proves it. Default `false`.
+    pub require_approval: bool,
+}
+
+impl Default for RotationOptions {
+    fn default() -> Self {
+        Self {
+            retire_after: Duration::from_secs(24 * 3600),
+            require_approval: false,
+        }
+    }
+}
+
+/// How [`TrustStore::invite`] makes an invitation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvitationOptions {
+    /// How long the invitation can be redeemed, in whole seconds. Default 24 hours; zero is an
+    /// error.
+    pub valid_for: Duration,
+    /// How many times it can be redeemed. Default 1; zero is an error.
+    pub uses: u32,
+}
+
+impl Default for InvitationOptions {
+    fn default() -> Self {
+        Self {
+            valid_for: Duration::from_secs(24 * 3600),
+            uses: 1,
+        }
+    }
+}
+
 /// A peer waiting for acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitingEntry {
@@ -53,8 +103,146 @@ pub struct WaitingEntry {
     pub source: Option<SocketAddr>,
 }
 
-/// Persistent trust: peers an operator accepted, and peers that were turned away and wait to
-/// be accepted (pairing).
+/// The id of an invitation: the SHA-256 of its secret, and the name of its file. Knowing it
+/// does not let anyone redeem the invitation.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct InvitationId([u8; 32]);
+
+impl InvitationId {
+    /// The id of the invitation whose secret is `secret`.
+    pub fn of(secret: &[u8; 32]) -> Self {
+        Self(Sha256::digest(secret).into())
+    }
+
+    /// 64 lowercase hexadecimal characters.
+    pub fn hex(&self) -> String {
+        PeerId::from_bytes(self.0).hex()
+    }
+}
+
+impl fmt::Display for InvitationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.hex())
+    }
+}
+
+impl fmt::Debug for InvitationId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "InvitationId({})", self.hex())
+    }
+}
+
+impl FromStr for InvitationId {
+    type Err = Error;
+
+    /// 64 hexadecimal characters.
+    fn from_str(text: &str) -> Result<Self, Error> {
+        let text = text.trim();
+        if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(Error::InvalidId);
+        }
+        let id: PeerId = text.parse()?;
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(id.as_bytes());
+        Ok(Self(bytes))
+    }
+}
+
+/// A one-time pairing secret: whoever presents it may pair, until it expires or its uses run
+/// out.
+///
+/// The store keeps only the [`id`](Invitation::id), never the secret: the caller hands the
+/// secret to the joiner (a link or QR code, with the inviter's id). `Debug` does not show it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct Invitation {
+    /// The secret, 32 random bytes.
+    pub secret: [u8; 32],
+    /// When it stops being redeemable.
+    pub expires: SystemTime,
+    /// Redemptions left: as made by [`TrustStore::invite`], or after this one by
+    /// [`TrustStore::redeem`].
+    pub uses: u32,
+    /// The inviter's note on whom it is for, one line of at most [`MAX_LABEL`] bytes.
+    pub label: String,
+}
+
+impl Invitation {
+    /// The invitation's id.
+    pub fn id(&self) -> InvitationId {
+        InvitationId::of(&self.secret)
+    }
+}
+
+impl fmt::Debug for Invitation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Invitation")
+            .field("id", &self.id())
+            .field("expires", &self.expires)
+            .field("uses", &self.uses)
+            .field("label", &self.label)
+            .finish_non_exhaustive()
+    }
+}
+
+/// An open invitation, as listed: everything but the secret.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvitationEntry {
+    /// Its id.
+    pub id: InvitationId,
+    /// When it stops being redeemable.
+    pub expires: SystemTime,
+    /// Redemptions left.
+    pub uses: u32,
+    /// The inviter's note.
+    pub label: String,
+}
+
+/// A pending successor: `new` was announced by the peer accepted as `old`, and is accepted once
+/// the peer proves it (or the caller promotes it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Successor {
+    /// The accepted key that announced it.
+    pub old: PeerId,
+    /// The announced key.
+    pub new: PeerId,
+}
+
+/// An accepted key with a retirement time: it is refused from `retires` on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Retiring {
+    /// The retiring key.
+    pub id: PeerId,
+    /// The key that replaced it, when it was replaced by rotation.
+    pub successor: Option<PeerId>,
+    /// When it stops being accepted.
+    pub retires: SystemTime,
+}
+
+/// A change of a peer's key, for the caller to report as it chooses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RotationEvent {
+    /// The peer accepted as `old` announced `new` as its successor.
+    Announced {
+        /// The announcing key.
+        old: PeerId,
+        /// The announced key.
+        new: PeerId,
+    },
+    /// `new` was promoted: it is accepted, and `old` retires at `retires`.
+    Promoted {
+        /// The replaced key.
+        old: PeerId,
+        /// The key now accepted.
+        new: PeerId,
+        /// When `old` stops being accepted.
+        retires: SystemTime,
+    },
+}
+
+/// Persistent trust: peers an operator accepted, peers that were turned away and wait to be
+/// accepted (pairing), open invitations, and announced successor keys.
 ///
 /// # Pairing
 ///
@@ -72,6 +260,19 @@ pub struct WaitingEntry {
 /// somebody else's identity, or put a real peer's id in front of the operator under a source
 /// address that is not theirs. A handshake that fails to prove the key records nothing.
 ///
+/// An [`invitation`](TrustStore::invite) lets a joiner pair without waiting: it presents the
+/// secret over a channel that proves its key, and the inviter [`redeem`](TrustStore::redeem)s
+/// it and accepts the key.
+///
+/// # Rotation
+///
+/// A peer accepted as key A announces its successor B over a session A authenticated
+/// ([`announce_successor`](TrustStore::announce_successor)). The first time the peer proves B
+/// in a handshake, the method [`promote_successor`](TrustStore::promote_successor)s it, unless
+/// [`RotationOptions::require_approval`] leaves that to the caller; A is then accepted until
+/// [`RotationOptions::retire_after`] has passed, and refused from then on. Removing A removes
+/// its pending successor. Each step is queued as a [`RotationEvent`].
+///
 /// # Key material and methods
 ///
 /// The store keeps the bytes a method hands it as a [`KeyMaterial`] and never interprets
@@ -80,29 +281,36 @@ pub struct WaitingEntry {
 /// reads only the entries that name it. The id of an entry is the SHA-256 of its bytes; the
 /// store checks that when it reads a file.
 ///
-/// # On-disk format (version 3)
+/// # On-disk format (version 4)
 ///
 /// Under `<state_dir>/peers/`:
 ///
 /// ```text
-/// accepted/<64 lowercase hex>.pem   one PEM block; the name is the peer's id
-/// waiting/<64 lowercase hex>.pem    the same, for a peer that proved its key and was refused
+/// accepted/<64 lowercase hex>.pem     one PEM block; the name is the peer's id
+/// waiting/<64 lowercase hex>.pem      the same, for a peer that proved its key and was refused
+/// successors/<64 lowercase hex>.pem   an announced successor key, named by its id
+/// invitations/<64 lowercase hex>.inv  an open invitation, named by the SHA-256 of its secret
 /// ```
 ///
 /// Before the PEM block a file may hold header lines (PEM allows explanatory text there):
-/// `Method: <name>` and, in a waiting file, `Source: <ip>:<port>` (IPv6 as `[addr]:port`),
-/// the address the handshake came from. The block's label is the one the method chose
-/// (`CERTIFICATE` for `tls`) and its content is the key bytes. Files of versions 1 and 2 have
-/// no `Method:` line and read as `tls`; version 1 files have no `Source:` line either.
-/// Names in the grouped base32 spelling are also read; new files are always written with the
-/// hex name. Accepting moves a file from `waiting/` to `accepted/`, rewritten without the
-/// `Source:` line.
+/// `Method: <name>`; in a waiting file `Source: <ip>:<port>` (IPv6 as `[addr]:port`), the
+/// address the handshake came from; in an accepted file `Successor: <64 hex>` (the announced
+/// or promoting successor) and `Retires: <unix seconds>`; in a successor file
+/// `Predecessor: <64 hex>`. An invitation file is header lines only: `Expires: <unix
+/// seconds>`, `Uses: <count>` and, when not empty, `Label: <text>`; it never holds the
+/// secret. Files of versions 1 and 2 have no `Method:` line and read as `tls`; version 1 files
+/// have no `Source:` line either. Names in the grouped base32 spelling are also read; new
+/// files are always written with the hex name. Accepting moves a file from `waiting/` to
+/// `accepted/`, rewritten without the `Source:` line.
 #[derive(Debug, Clone)]
 pub struct TrustStore {
     root: PathBuf,
     seen: Arc<Mutex<Seen>>,
+    events: Arc<Mutex<VecDeque<RotationEvent>>>,
     limits: WaitingLimits,
     ipv6_prefix: u8,
+    clock: Clock,
+    rotation: RotationOptions,
 }
 
 /// Waiting entries recorded by this process, per source ([`source_key`]), oldest first.
@@ -115,6 +323,9 @@ struct Seen {
 struct Entry {
     key: KeyMaterial,
     source: Option<SocketAddr>,
+    successor: Option<PeerId>,
+    retires: Option<u64>,
+    predecessor: Option<PeerId>,
 }
 
 impl TrustStore {
@@ -130,8 +341,11 @@ impl TrustStore {
         Ok(Self {
             root,
             seen: Arc::default(),
+            events: Arc::default(),
             limits: WaitingLimits::default(),
             ipv6_prefix: DEFAULT_IPV6_PREFIX,
+            clock: Clock::system(),
+            rotation: RotationOptions::default(),
         })
     }
 
@@ -153,6 +367,31 @@ impl TrustStore {
         self
     }
 
+    /// This store reading `clock` for invitation expiry and key retirement (the system clock
+    /// unless set).
+    #[must_use]
+    pub fn with_clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// This store rotating keys by `options` (24 hours, automatic, unless set).
+    #[must_use]
+    pub fn with_rotation(mut self, options: RotationOptions) -> Self {
+        self.rotation = options;
+        self
+    }
+
+    /// The rotation options in force.
+    pub fn rotation(&self) -> RotationOptions {
+        self.rotation
+    }
+
+    /// The clock in force.
+    pub fn clock(&self) -> &Clock {
+        &self.clock
+    }
+
     /// Peers awaiting operator acceptance, sorted by id, each with the address it connected
     /// from. Every entry proved it holds its key.
     ///
@@ -170,18 +409,23 @@ impl TrustStore {
             .collect())
     }
 
-    /// Accepted ids, sorted.
+    /// Accepted ids, sorted; a key past its retirement time is not listed.
     ///
     /// # Errors
     ///
     /// [`Error::Io`] when the directory cannot be read.
     pub fn accepted(&self) -> Result<Vec<PeerId>, Error> {
-        self.list("accepted")
+        Ok(self
+            .list("accepted")?
+            .into_iter()
+            .filter(|id| self.current(id).is_some())
+            .collect())
     }
 
-    /// The key material of an accepted peer, when it is accepted and its file is sound.
+    /// The key material of an accepted peer, when it is accepted, not retired, and its file is
+    /// sound.
     pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial> {
-        self.read("accepted", id).map(|entry| entry.key)
+        self.current(id).map(|entry| entry.key)
     }
 
     /// The key material of a waiting peer, when it is waiting and its file is sound.
@@ -221,7 +465,8 @@ impl TrustStore {
     /// # Errors
     ///
     /// [`Error::Material`] when the key is not valid, [`Error::AlreadyAccepted`] when it is
-    /// accepted already, [`Error::Io`] on write failure.
+    /// accepted already (a retired key included: remove it first), [`Error::Io`] on write
+    /// failure.
     pub fn accept_key(&self, key: &KeyMaterial) -> Result<PeerId, Error> {
         key.check()?;
         let id = key.id();
@@ -230,14 +475,22 @@ impl TrustStore {
         Ok(id)
     }
 
-    /// Removes an accepted or waiting peer; `true` when something was removed.
+    /// Removes an accepted, waiting or pending-successor peer, and the pending successor an
+    /// accepted one announced; `true` when something was removed.
     ///
     /// # Errors
     ///
     /// [`Error::Io`] when a file cannot be removed.
     pub fn remove(&self, id: &PeerId) -> Result<bool, Error> {
         let mut removed = false;
-        for section in ["accepted", "waiting"] {
+        if let Some(successor) = self.read("accepted", id).and_then(|entry| entry.successor)
+            && self
+                .read("successors", &successor)
+                .is_some_and(|entry| entry.predecessor == Some(*id))
+        {
+            fs::remove_file(self.path("successors", &successor)).map_err(Error::Io)?;
+        }
+        for section in ["accepted", "waiting", "successors"] {
             if let Some(path) = self.existing(section, id) {
                 fs::remove_file(path).map_err(Error::Io)?;
                 removed = true;
@@ -246,9 +499,10 @@ impl TrustStore {
         Ok(removed)
     }
 
-    /// Whether `id` is accepted and its stored key really hashes to it.
+    /// Whether `id` is accepted, not past its retirement time, and its stored key really hashes
+    /// to it.
     pub fn is_accepted(&self, id: &PeerId) -> bool {
-        self.read("accepted", id).is_some()
+        self.current(id).is_some()
     }
 
     /// Records a turned-away peer's key as waiting. Failures are not reported to the peer.
@@ -301,18 +555,318 @@ impl TrustStore {
         let _ = write_new(&self.path("waiting", &id), &text);
     }
 
-    fn write_accepted(&self, key: &KeyMaterial) -> Result<(), Error> {
-        let text = format!(
-            "Method: {}\n{}",
-            key.method,
-            encode_pem(&key.label, &key.bytes)
+    /// Makes an invitation with a secret from `random` and records it (without the secret).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidOptions`] when `label` is not one line of at most [`MAX_LABEL`]
+    /// bytes without surrounding spaces, `uses` is 0 or `valid_for` is zero;
+    /// [`Error::Random`] when `random` fails; [`Error::Io`] when the file cannot be written.
+    pub fn invite(
+        &self,
+        random: &Random,
+        options: InvitationOptions,
+        label: &str,
+    ) -> Result<Invitation, Error> {
+        let label_ok = label.len() <= MAX_LABEL
+            && label.trim() == label
+            && !label.chars().any(char::is_control);
+        if !label_ok || options.uses == 0 || options.valid_for.is_zero() {
+            return Err(Error::InvalidOptions);
+        }
+        let mut secret = [0u8; 32];
+        random.fill(&mut secret)?;
+        let expires = from_unix_seconds(
+            unix_seconds(self.clock.now()).saturating_add(options.valid_for.as_secs()),
         );
-        match write_new(&self.path("accepted", &key.id()), &text) {
+        let invitation = Invitation {
+            secret,
+            expires,
+            uses: options.uses,
+            label: label.to_owned(),
+        };
+        fs::create_dir_all(self.root.join("invitations")).map_err(Error::Io)?;
+        write_new(
+            &self.invitation_path(&invitation.id()),
+            &invitation_text(expires, options.uses, label),
+        )
+        .map_err(Error::Io)?;
+        Ok(invitation)
+    }
+
+    /// Redeems an invitation by its secret, using one of its uses: the invitation with the uses
+    /// left after this one. The last use removes it.
+    ///
+    /// Atomic: of concurrent redemptions of a single-use invitation exactly one succeeds. An
+    /// expired invitation is removed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotInvited`] when no open invitation has this secret, [`Error::Expired`] when
+    /// it expired, [`Error::Io`] when its file cannot be read or moved.
+    pub fn redeem(&self, secret: &[u8; 32]) -> Result<Invitation, Error> {
+        let path = self.invitation_path(&InvitationId::of(secret));
+        let claimed = temporary_path(&path);
+        // Renaming is the claim: only one redeemer can move the file away.
+        if let Err(error) = fs::rename(&path, &claimed) {
+            return Err(if error.kind() == io::ErrorKind::NotFound {
+                Error::NotInvited
+            } else {
+                Error::Io(error)
+            });
+        }
+        let text = fs::read_to_string(&claimed);
+        let parsed = text
+            .as_deref()
+            .ok()
+            .and_then(parse_invitation)
+            .ok_or(Error::NotInvited);
+        let result = parsed.and_then(|(expires, uses, label)| {
+            if self.clock.now() >= from_unix_seconds(expires) {
+                return Err(Error::Expired);
+            }
+            let left = uses - 1;
+            if left > 0 {
+                // Losing the remaining uses on a write failure fails closed.
+                let _ = write_new(
+                    &path,
+                    &invitation_text(from_unix_seconds(expires), left, &label),
+                );
+            }
+            Ok(Invitation {
+                secret: *secret,
+                expires: from_unix_seconds(expires),
+                uses: left,
+                label,
+            })
+        });
+        let _ = fs::remove_file(&claimed);
+        result
+    }
+
+    /// The open invitations, sorted by id, expired ones included until redeemed or revoked.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] when the directory cannot be read.
+    pub fn invitations(&self) -> Result<Vec<InvitationEntry>, Error> {
+        let directory = self.root.join("invitations");
+        let entries = match fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::Io(error)),
+        };
+        let mut found = Vec::new();
+        for entry in entries {
+            let path = entry.map_err(Error::Io)?.path();
+            let Some(id) = path
+                .extension()
+                .filter(|extension| *extension == "inv")
+                .and_then(|_| path.file_stem())
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<InvitationId>().ok())
+            else {
+                continue;
+            };
+            if let Some((expires, uses, label)) = fs::read_to_string(&path)
+                .ok()
+                .as_deref()
+                .and_then(parse_invitation)
+            {
+                found.push(InvitationEntry {
+                    id,
+                    expires: from_unix_seconds(expires),
+                    uses,
+                    label,
+                });
+            }
+        }
+        found.sort_by_key(|entry| entry.id);
+        Ok(found)
+    }
+
+    /// Revokes an open invitation; `true` when it existed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] when its file cannot be removed.
+    pub fn revoke_invitation(&self, id: &InvitationId) -> Result<bool, Error> {
+        match fs::remove_file(self.invitation_path(id)) {
+            Ok(()) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(Error::Io(error)),
+        }
+    }
+
+    /// Records `new` as the pending successor of the accepted key `old`, replacing a successor
+    /// `old` announced before. Call it only with a key the holder of `old` sent over a session
+    /// `old` authenticated.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotAccepted`] when `old` is not accepted or is already retiring;
+    /// [`Error::AlreadyAccepted`] when `new` is accepted; [`Error::Material`] when `new` is not
+    /// valid or is `old`; [`Error::Io`] on write failure.
+    pub fn announce_successor(&self, old: &PeerId, new: &KeyMaterial) -> Result<(), Error> {
+        new.check()?;
+        let new_id = new.id();
+        if new_id == *old {
+            return Err(Error::Material);
+        }
+        let entry = self
+            .current(old)
+            .filter(|entry| entry.retires.is_none())
+            .ok_or(Error::NotAccepted)?;
+        if self.existing("accepted", &new_id).is_some() {
+            return Err(Error::AlreadyAccepted);
+        }
+        if let Some(previous) = entry.successor
+            && previous != new_id
+            && self
+                .read("successors", &previous)
+                .is_some_and(|pending| pending.predecessor == Some(*old))
+        {
+            let _ = fs::remove_file(self.path("successors", &previous));
+        }
+        fs::create_dir_all(self.root.join("successors")).map_err(Error::Io)?;
+        let text = format!(
+            "Predecessor: {}\nMethod: {}\n{}",
+            old.hex(),
+            new.method,
+            encode_pem(&new.label, &new.bytes)
+        );
+        replace(&self.path("successors", &new_id), &text).map_err(Error::Io)?;
+        let path = self.existing("accepted", old).ok_or(Error::NotAccepted)?;
+        replace(&path, &accepted_text(&entry.key, Some(&new_id), None)).map_err(Error::Io)?;
+        self.push_event(RotationEvent::Announced {
+            old: *old,
+            new: new_id,
+        });
+        Ok(())
+    }
+
+    /// The key of `new` when it is the pending successor of a key that is still accepted, not
+    /// retiring, and names it.
+    pub fn successor_key(&self, new: &PeerId) -> Option<KeyMaterial> {
+        let pending = self.read("successors", new)?;
+        let old = pending.predecessor?;
+        self.current(&old)
+            .filter(|entry| entry.retires.is_none() && entry.successor == Some(*new))
+            .map(|_| pending.key)
+    }
+
+    /// Accepts the pending successor `new` and gives its predecessor a retirement time
+    /// ([`RotationOptions::retire_after`] from now). Returns the predecessor's id. A method calls
+    /// it once the peer proved `new`, unless [`RotationOptions::require_approval`] is set; the
+    /// caller calls it to approve.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NoSuccessor`] when `new` is not the pending successor of an accepted key;
+    /// [`Error::Io`] on write failure.
+    pub fn promote_successor(&self, new: &PeerId) -> Result<PeerId, Error> {
+        let key = self.successor_key(new).ok_or(Error::NoSuccessor)?;
+        let old = self
+            .read("successors", new)
+            .and_then(|entry| entry.predecessor)
+            .ok_or(Error::NoSuccessor)?;
+        let old_entry = self.current(&old).ok_or(Error::NoSuccessor)?;
+        match self.write_accepted(&key) {
+            Ok(()) | Err(Error::AlreadyAccepted) => {}
+            Err(error) => return Err(error),
+        }
+        let retires =
+            unix_seconds(self.clock.now()).saturating_add(self.rotation.retire_after.as_secs());
+        let path = self.existing("accepted", &old).ok_or(Error::NoSuccessor)?;
+        replace(
+            &path,
+            &accepted_text(&old_entry.key, Some(new), Some(retires)),
+        )
+        .map_err(Error::Io)?;
+        let _ = fs::remove_file(self.path("successors", new));
+        self.push_event(RotationEvent::Promoted {
+            old,
+            new: *new,
+            retires: from_unix_seconds(retires),
+        });
+        Ok(old)
+    }
+
+    /// The pending successors, sorted by the new key's id.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] when the directory cannot be read.
+    pub fn successors(&self) -> Result<Vec<Successor>, Error> {
+        Ok(self
+            .list("successors")?
+            .into_iter()
+            .filter(|new| self.successor_key(new).is_some())
+            .filter_map(|new| {
+                let old = self.read("successors", &new)?.predecessor?;
+                Some(Successor { old, new })
+            })
+            .collect())
+    }
+
+    /// Accepted keys with a retirement time, sorted by id, those already retired included.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] when the directory cannot be read.
+    pub fn retiring(&self) -> Result<Vec<Retiring>, Error> {
+        Ok(self
+            .list("accepted")?
+            .into_iter()
+            .filter_map(|id| {
+                let entry = self.read("accepted", &id)?;
+                Some(Retiring {
+                    id,
+                    successor: entry.successor,
+                    retires: from_unix_seconds(entry.retires?),
+                })
+            })
+            .collect())
+    }
+
+    /// The rotation events since the last call, oldest first. Only events of this process are
+    /// kept, at most 1024; the on-disk state is in [`successors`](TrustStore::successors) and
+    /// [`retiring`](TrustStore::retiring).
+    pub fn take_rotation_events(&self) -> Vec<RotationEvent> {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
+
+    fn push_event(&self, event: RotationEvent) {
+        let mut events = self.events.lock().unwrap_or_else(PoisonError::into_inner);
+        if events.len() >= MAX_EVENTS {
+            events.pop_front();
+        }
+        events.push_back(event);
+    }
+
+    fn write_accepted(&self, key: &KeyMaterial) -> Result<(), Error> {
+        match write_new(
+            &self.path("accepted", &key.id()),
+            &accepted_text(key, None, None),
+        ) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 Err(Error::AlreadyAccepted)
             }
             Err(error) => Err(Error::Io(error)),
+        }
+    }
+
+    /// The accepted entry for `id` when it is sound and not past its retirement time.
+    fn current(&self, id: &PeerId) -> Option<Entry> {
+        let entry = self.read("accepted", id)?;
+        match entry.retires {
+            Some(retires) if self.clock.now() >= from_unix_seconds(retires) => None,
+            _ => Some(entry),
         }
     }
 
@@ -323,8 +877,13 @@ impl TrustStore {
     }
 
     fn list(&self, section: &str) -> Result<Vec<PeerId>, Error> {
+        let entries = match fs::read_dir(self.root.join(section)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => return Err(Error::Io(error)),
+        };
         let mut ids = Vec::new();
-        for entry in fs::read_dir(self.root.join(section)).map_err(Error::Io)? {
+        for entry in entries {
             let path = entry.map_err(Error::Io)?.path();
             if path.extension().is_some_and(|extension| extension == "pem")
                 && let Some(Ok(id)) = path
@@ -344,6 +903,12 @@ impl TrustStore {
         self.root.join(section).join(format!("{}.pem", id.hex()))
     }
 
+    fn invitation_path(&self, id: &InvitationId) -> PathBuf {
+        self.root
+            .join("invitations")
+            .join(format!("{}.inv", id.hex()))
+    }
+
     /// The file for `id` in `section`, under either accepted spelling of the name.
     fn existing(&self, section: &str, id: &PeerId) -> Option<PathBuf> {
         let current = self.path(section, id);
@@ -360,33 +925,83 @@ impl TrustStore {
 
 /// The source an address counts against: IPv4 as it is, IPv4-mapped IPv6 as the IPv4 address,
 /// other IPv6 cut to its first `prefix` bits.
-fn source_key(address: IpAddr, prefix: u8) -> IpAddr {
+pub(crate) fn source_key(address: IpAddr, prefix: u8) -> IpAddr {
     match address {
         IpAddr::V4(_) => address,
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => IpAddr::V4(v4),
             None => {
-                let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+                let mask = u128::MAX
+                    .checked_shl(128 - u32::from(prefix.min(128)))
+                    .unwrap_or(0);
                 IpAddr::V6(Ipv6Addr::from(u128::from(v6) & mask))
             }
         },
     }
 }
 
+/// An accepted file: `Method:`, then `Successor:` and `Retires:` when set, then the PEM block.
+fn accepted_text(key: &KeyMaterial, successor: Option<&PeerId>, retires: Option<u64>) -> String {
+    let mut text = format!("Method: {}\n", key.method);
+    if let Some(successor) = successor {
+        text.push_str(&format!("Successor: {}\n", successor.hex()));
+    }
+    if let Some(retires) = retires {
+        text.push_str(&format!("Retires: {retires}\n"));
+    }
+    text.push_str(&encode_pem(&key.label, &key.bytes));
+    text
+}
+
+fn invitation_text(expires: SystemTime, uses: u32, label: &str) -> String {
+    let mut text = format!("Expires: {}\nUses: {uses}\n", unix_seconds(expires));
+    if !label.is_empty() {
+        text.push_str(&format!("Label: {label}\n"));
+    }
+    text
+}
+
+/// `(expires, uses, label)` of an invitation file; `None` unless `Expires:` and a positive
+/// `Uses:` are present.
+fn parse_invitation(text: &str) -> Option<(u64, u32, String)> {
+    let (mut expires, mut uses, mut label) = (None, None, String::new());
+    for line in text.lines() {
+        if let Some(value) = line.strip_prefix("Expires: ") {
+            expires = value.trim().parse().ok();
+        } else if let Some(value) = line.strip_prefix("Uses: ") {
+            uses = value.trim().parse::<u32>().ok().filter(|uses| *uses > 0);
+        } else if let Some(value) = line.strip_prefix("Label: ") {
+            value.trim().clone_into(&mut label);
+        }
+    }
+    Some((expires?, uses?, label))
+}
+
 /// Reads a store file: header lines, then one PEM block.
 fn parse(text: &str) -> Option<Entry> {
     let (headers, label, bytes) = decode_pem(text)?;
     let mut method = LEGACY_METHOD;
-    let mut source = None;
+    let (mut source, mut successor, mut retires, mut predecessor) = (None, None, None, None);
     for line in headers {
         if let Some(value) = line.strip_prefix("Method: ") {
             method = value.trim();
         } else if let Some(value) = line.strip_prefix("Source: ") {
             source = value.trim().parse().ok();
+        } else if let Some(value) = line.strip_prefix("Successor: ") {
+            successor = Some(value.trim().parse().ok()?);
+        } else if let Some(value) = line.strip_prefix("Retires: ") {
+            retires = Some(value.trim().parse().ok()?);
+        } else if let Some(value) = line.strip_prefix("Predecessor: ") {
+            predecessor = Some(value.trim().parse().ok()?);
         }
     }
-    let key = KeyMaterial::new(method, label, bytes).ok()?;
-    Some(Entry { key, source })
+    Some(Entry {
+        key: KeyMaterial::new(method, label, bytes).ok()?,
+        source,
+        successor,
+        retires,
+        predecessor,
+    })
 }
 
 /// Writes `text` to `path` unless it exists, atomically.
@@ -402,6 +1017,24 @@ fn write_new(path: &Path, text: &str) -> io::Result<()> {
         .and_then(|()| fs::hard_link(&temporary, path));
     drop(file);
     let _ = fs::remove_file(&temporary);
+    result
+}
+
+/// Writes `text` to `path`, replacing what is there, atomically.
+fn replace(path: &Path, text: &str) -> io::Result<()> {
+    let temporary = temporary_path(path);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    let result = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all());
+    drop(file);
+    let result = result.and_then(|()| fs::rename(&temporary, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
     result
 }
 
