@@ -11,6 +11,7 @@
 //! | [`KeyMaterial`] | The public key bytes a method gives the store, tagged with its name. |
 //! | [`Handshake`], [`Method`] | The sans-IO exchange a method implements, over any transport. |
 //! | [`drive_stream`], [`drive_messages`] | Blocking loops that run a handshake. |
+//! | [`complete_stream`], [`complete_messages`] | The same loops, leaving the finish to the caller. |
 //!
 //! # Features
 //!
@@ -31,7 +32,10 @@ mod key;
 mod method;
 mod store;
 
-pub use drive::{DriveError, MAX_MESSAGE, MessageTransport, drive_messages, drive_stream};
+pub use drive::{
+    DriveError, MAX_MESSAGE, MessageTransport, complete_messages, complete_stream, drive_messages,
+    drive_stream,
+};
 pub use error::Error;
 pub use id::{Digest, PeerId};
 pub use key::{KeyMaterial, MAX_KEY_BYTES};

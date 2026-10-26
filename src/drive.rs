@@ -70,9 +70,29 @@ pub trait MessageTransport {
 ///
 /// [`DriveError`] when the stream fails or closes, or the handshake refuses the peer.
 pub fn drive_stream<H, T>(
-    mut handshake: H,
+    handshake: H,
     io: &mut T,
 ) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: Read + Write,
+{
+    complete_stream(handshake, io)?
+        .finish()
+        .map_err(DriveError::Handshake)
+}
+
+/// [`drive_stream`] without the final [`finish`](Handshake::finish): returns the handshake
+/// once it [`is_complete`](Handshake::is_complete), with everything it queued sent.
+///
+/// For a method whose own way of finishing differs from [`Handshake::finish`], such as a TLS
+/// server that does not authenticate its client at that layer and so has no verified peer to
+/// name. The caller finishes it with the method's own call.
+///
+/// # Errors
+///
+/// As [`drive_stream`].
+pub fn complete_stream<H, T>(mut handshake: H, io: &mut T) -> Result<H, DriveError<H::Error>>
 where
     H: Handshake,
     T: Read + Write,
@@ -82,7 +102,7 @@ where
     loop {
         send_all(&mut handshake, io, framed)?;
         if handshake.is_complete() {
-            return handshake.finish().map_err(DriveError::Handshake);
+            return Ok(handshake);
         }
         let received = if framed {
             let mut length = [0u8; 4];
@@ -137,9 +157,28 @@ where
 ///
 /// [`DriveError`] when the transport fails or the handshake refuses the peer.
 pub fn drive_messages<H, T>(
-    mut handshake: H,
+    handshake: H,
     transport: &mut T,
 ) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: MessageTransport,
+{
+    complete_messages(handshake, transport)?
+        .finish()
+        .map_err(DriveError::Handshake)
+}
+
+/// [`drive_messages`] without the final [`finish`](Handshake::finish), as
+/// [`complete_stream`] is to [`drive_stream`].
+///
+/// # Errors
+///
+/// As [`drive_messages`].
+pub fn complete_messages<H, T>(
+    mut handshake: H,
+    transport: &mut T,
+) -> Result<H, DriveError<H::Error>>
 where
     H: Handshake,
     T: MessageTransport,
@@ -149,7 +188,7 @@ where
             transport.send(&out).map_err(DriveError::Io)?;
         }
         if handshake.is_complete() {
-            return handshake.finish().map_err(DriveError::Handshake);
+            return Ok(handshake);
         }
         let message = transport.recv().map_err(DriveError::Io)?;
         handshake.receive(&message).map_err(DriveError::Handshake)?;

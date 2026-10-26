@@ -26,9 +26,26 @@ pub trait MessageTransport {
 ///
 /// [`DriveError`] when the stream fails or closes, or the handshake refuses the peer.
 pub async fn drive_stream<H, T>(
-    mut handshake: H,
+    handshake: H,
     io: &mut T,
 ) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    complete_stream(handshake, io)
+        .await?
+        .finish()
+        .map_err(DriveError::Handshake)
+}
+
+/// [`complete_stream`](crate::complete_stream) over a tokio stream: the handshake once
+/// complete, not yet finished.
+///
+/// # Errors
+///
+/// As [`drive_stream`].
+pub async fn complete_stream<H, T>(mut handshake: H, io: &mut T) -> Result<H, DriveError<H::Error>>
 where
     H: Handshake,
     T: AsyncRead + AsyncWrite + Unpin,
@@ -38,7 +55,7 @@ where
     loop {
         send_all(&mut handshake, io, framed).await?;
         if handshake.is_complete() {
-            return handshake.finish().map_err(DriveError::Handshake);
+            return Ok(handshake);
         }
         let received = if framed {
             let mut length = [0u8; 4];
@@ -93,9 +110,29 @@ where
 ///
 /// [`DriveError`] when the transport fails or the handshake refuses the peer.
 pub async fn drive_messages<H, T>(
-    mut handshake: H,
+    handshake: H,
     transport: &mut T,
 ) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: MessageTransport,
+{
+    complete_messages(handshake, transport)
+        .await?
+        .finish()
+        .map_err(DriveError::Handshake)
+}
+
+/// [`complete_messages`](crate::complete_messages) over an async message transport: the
+/// handshake once complete, not yet finished.
+///
+/// # Errors
+///
+/// As [`drive_messages`].
+pub async fn complete_messages<H, T>(
+    mut handshake: H,
+    transport: &mut T,
+) -> Result<H, DriveError<H::Error>>
 where
     H: Handshake,
     T: MessageTransport,
@@ -105,7 +142,7 @@ where
             transport.send(&out).await.map_err(DriveError::Io)?;
         }
         if handshake.is_complete() {
-            return handshake.finish().map_err(DriveError::Handshake);
+            return Ok(handshake);
         }
         let message = transport.recv().await.map_err(DriveError::Io)?;
         if let Err(error) = handshake.receive(&message) {

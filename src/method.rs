@@ -79,8 +79,9 @@ pub trait Handshake {
     /// When the handshake cannot continue.
     fn transmit(&mut self) -> Result<Option<Vec<u8>>, Self::Error>;
 
-    /// Whether the peer is verified and [`finish`](Handshake::finish) will succeed. Output
-    /// still waiting in [`transmit`](Handshake::transmit) must be sent first.
+    /// Whether the exchange is over and [`finish`](Handshake::finish) can be called; it
+    /// succeeds when the method verified a peer. Output still waiting in
+    /// [`transmit`](Handshake::transmit) must be sent first.
     fn is_complete(&self) -> bool;
 
     /// The verified peer and the method's output.

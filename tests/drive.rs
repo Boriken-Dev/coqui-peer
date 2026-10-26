@@ -8,8 +8,8 @@ use std::sync::mpsc;
 use std::thread;
 
 use coqui_peer::{
-    DriveError, Established, Framing, Handshake, MessageTransport, PeerId, drive_messages,
-    drive_stream,
+    DriveError, Established, Framing, Handshake, MessageTransport, PeerId, complete_messages,
+    complete_stream, drive_messages, drive_stream,
 };
 
 #[derive(Debug)]
@@ -173,6 +173,54 @@ fn a_handshake_runs_over_messages() {
     assert_eq!(server.join().unwrap().peer, PeerId::of(b"client"));
 }
 
+/// The complete loops stop where the drive loops would call `finish`, everything sent, and
+/// hand the handshake back for the caller to finish its own way.
+#[test]
+fn the_complete_loops_return_the_unfinished_handshake() {
+    for framing in [Framing::Stream, Framing::Message] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            complete_stream(Toy::new(framing, "server", false), &mut socket).unwrap()
+        });
+        let mut socket = TcpStream::connect(address).unwrap();
+        let seen = drive_stream(Toy::new(framing, "client", true), &mut socket).unwrap();
+        assert_eq!(seen.peer, PeerId::of(b"server"));
+        let served = server.join().unwrap();
+        assert!(served.is_complete());
+        assert_eq!(served.peer, Some(PeerId::of(b"client")));
+        assert_eq!(served.finish().unwrap().peer, PeerId::of(b"client"));
+    }
+
+    let (to_server, server_inbox) = mpsc::channel();
+    let (to_client, client_inbox) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let mut pipe = Pipe {
+            out: to_client,
+            inbox: server_inbox,
+        };
+        complete_messages(Toy::new(Framing::Message, "server", false), &mut pipe).unwrap()
+    });
+    let mut pipe = Pipe {
+        out: to_server,
+        inbox: client_inbox,
+    };
+    let dialed = complete_messages(Toy::new(Framing::Message, "client", true), &mut pipe).unwrap();
+    assert_eq!(dialed.peer, Some(PeerId::of(b"server")));
+    assert_eq!(server.join().unwrap().peer, Some(PeerId::of(b"client")));
+
+    let refused = complete_messages(
+        Toy::new(Framing::Message, "server", false),
+        &mut Script(VecDeque::from(vec![
+            b"nonsense
+"
+            .to_vec(),
+        ])),
+    );
+    assert!(matches!(refused, Err(DriveError::Handshake(Refused))));
+}
+
 struct Script(VecDeque<Vec<u8>>);
 
 impl MessageTransport for Script {
@@ -224,6 +272,25 @@ mod asynchronous {
         }
     }
 
+    #[tokio::test]
+    async fn the_complete_loops_run_over_tokio() {
+        for framing in [Framing::Stream, Framing::Message] {
+            let (mut near, mut far) = tokio::io::duplex(64);
+            let server = tokio::spawn(async move {
+                asynch::complete_stream(Toy::new(framing, "server", false), &mut far)
+                    .await
+                    .unwrap()
+            });
+            let seen = asynch::drive_stream(Toy::new(framing, "client", true), &mut near)
+                .await
+                .unwrap();
+            assert_eq!(seen.peer, PeerId::of(b"server"));
+            let served = server.await.unwrap();
+            assert!(served.is_complete());
+            assert_eq!(served.peer, Some(PeerId::of(b"client")));
+        }
+    }
+
     struct Channel {
         out: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
         inbox: tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
@@ -266,5 +333,31 @@ mod asynchronous {
             .unwrap();
         assert_eq!(seen.peer, PeerId::of(b"server"));
         assert_eq!(server.await.unwrap(), PeerId::of(b"client"));
+    }
+
+    #[tokio::test]
+    async fn the_complete_loop_runs_over_async_messages() {
+        let (to_server, server_inbox) = tokio::sync::mpsc::unbounded_channel();
+        let (to_client, client_inbox) = tokio::sync::mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let mut channel = Channel {
+                out: to_client,
+                inbox: server_inbox,
+            };
+            asynch::complete_messages(Toy::new(Framing::Message, "server", false), &mut channel)
+                .await
+                .unwrap()
+                .peer
+        });
+        let mut channel = Channel {
+            out: to_server,
+            inbox: client_inbox,
+        };
+        let dialed =
+            asynch::complete_messages(Toy::new(Framing::Message, "client", true), &mut channel)
+                .await
+                .unwrap();
+        assert_eq!(dialed.peer, Some(PeerId::of(b"server")));
+        assert_eq!(server.await.unwrap(), Some(PeerId::of(b"client")));
     }
 }
