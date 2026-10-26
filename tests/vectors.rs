@@ -1,8 +1,8 @@
-//! The committed vectors in `tests/vectors/` pin the id text forms and the store file
-//! formats (versions 1 to 4) byte for byte, so implementations in other languages can check
-//! themselves against the same files.
+//! The committed vectors in `tests/vectors/` pin the id text forms and the store file format
+//! byte for byte, so implementations in other languages can check themselves against the same
+//! files.
 //!
-//! Regenerating the version 4 tree is a format change:
+//! Regenerating the store tree is a format change:
 //! `cargo test --all-features --test vectors -- --ignored regenerate`
 
 use std::fs;
@@ -64,76 +64,20 @@ fn each_id_has_the_committed_text_in_every_spelling() {
     }
 }
 
-#[test]
-fn every_store_version_reads_as_committed() {
-    let (a, b) = (certificate("cert-a.pem"), certificate("cert-b.pem"));
-    for version in ["store-v1", "store-v2", "store-v3"] {
-        let directory = tempfile::tempdir().unwrap();
-        copy_tree(&vectors().join(version), directory.path());
-        let store = TrustStore::open(directory.path()).unwrap();
-        assert!(store.is_accepted(&a.id()), "{version}");
-        assert!(!store.is_accepted(&b.id()), "{version}");
-        let waiting = store.waiting().unwrap();
-        assert_eq!(waiting.len(), 1, "{version}");
-        assert_eq!(waiting[0].id, b.id(), "{version}");
-        // Version 1 recorded no source.
-        let source = (version != "store-v1").then(|| "192.0.2.7:4000".parse().unwrap());
-        assert_eq!(waiting[0].source, source, "{version}");
-        // Files without a method line are TLS certificates.
-        assert_eq!(store.accepted_key(&a.id()), Some(a.clone()), "{version}");
-        store.accept(&b.id()).unwrap();
-        assert_eq!(store.accepted_key(&b.id()), Some(b.clone()), "{version}");
-    }
-}
-
-#[test]
-fn a_version_3_store_holds_another_methods_key() {
-    let directory = tempfile::tempdir().unwrap();
-    copy_tree(&vectors().join("store-v3"), directory.path());
-    let store = TrustStore::open(directory.path()).unwrap();
-    let key = example_key();
-    assert_eq!(read("example-key.id").trim(), key.id().canonical());
-    assert_eq!(store.accepted_key(&key.id()), Some(key));
-    assert_eq!(store.accepted().unwrap().len(), 2);
-}
-
-#[test]
-fn the_store_writes_version_3_files_as_committed() {
-    let directory = tempfile::tempdir().unwrap();
-    let store = TrustStore::open(directory.path()).unwrap();
-    let (a, b) = (certificate("cert-a.pem"), certificate("cert-b.pem"));
-    store.accept_key(&a).unwrap();
-    store.accept_key(&example_key()).unwrap();
-    store.record_waiting(&b, Some("192.0.2.7:4000".parse().unwrap()));
-    let committed = vectors().join("store-v3/peers");
-    for section in ["accepted", "waiting"] {
-        for entry in fs::read_dir(committed.join(section)).unwrap() {
-            let entry = entry.unwrap();
-            let written = directory
-                .path()
-                .join("peers")
-                .join(section)
-                .join(entry.file_name());
-            assert_eq!(
-                fs::read(&written).unwrap(),
-                fs::read(entry.path()).unwrap(),
-                "{section}/{}",
-                entry.file_name().to_string_lossy()
-            );
-        }
-    }
-}
-
-/// The time the version 4 vectors are written at.
+/// The time the store vectors are written at.
 const T0: u64 = 1_800_000_000;
 
-/// The secret of the committed invitation: bytes 0x40 to 0x5f.
+/// The secret of the committed invitation: bytes 0xa0 to 0xbf.
 fn secret() -> [u8; 32] {
-    std::array::from_fn(|index| 0x40 + index as u8)
+    std::array::from_fn(|index| 0xa0 + index as u8)
 }
 
 fn second_example_key() -> KeyMaterial {
     KeyMaterial::new("example", "PUBLIC KEY", (32..64).collect::<Vec<u8>>()).unwrap()
+}
+
+fn third_example_key() -> KeyMaterial {
+    KeyMaterial::new("example", "PUBLIC KEY", (64..96).collect::<Vec<u8>>()).unwrap()
 }
 
 fn store_at(directory: &Path, seconds: u64) -> TrustStore {
@@ -144,9 +88,10 @@ fn store_at(directory: &Path, seconds: u64) -> TrustStore {
         }))
 }
 
-/// Writes the version 4 tree: certificate A with B announced as its pending successor, an
-/// example key replaced by a second one and retiring, and a two-use invitation.
-fn write_version_4(directory: &Path) {
+/// Writes the store tree: certificate A with B announced as its pending successor, an example
+/// key replaced by a second one and retiring, a third example key waiting, and a two-use
+/// invitation.
+fn write_store(directory: &Path) {
     let store = store_at(directory, T0);
     let (a, b) = (certificate("cert-a.pem"), certificate("cert-b.pem"));
     store.accept_key(&a).unwrap();
@@ -155,6 +100,10 @@ fn write_version_4(directory: &Path) {
     store.accept_key(&one).unwrap();
     store.announce_successor(&one.id(), &two).unwrap();
     store.promote_successor(&two.id()).unwrap();
+    store.record_waiting(
+        &third_example_key(),
+        Some("192.0.2.7:4000".parse().unwrap()),
+    );
     let random = Random::from_fn(|out| {
         out.copy_from_slice(&secret()[..out.len()]);
         Ok(())
@@ -185,18 +134,18 @@ fn files(root: &Path) -> Vec<PathBuf> {
 }
 
 #[test]
-#[ignore = "rewrites the committed version 4 vectors"]
+#[ignore = "rewrites the committed store vectors"]
 fn regenerate() {
-    let target = vectors().join("store-v4");
+    let target = vectors().join("store");
     let _ = fs::remove_dir_all(&target);
-    write_version_4(&target);
+    write_store(&target);
 }
 
 #[test]
-fn the_store_writes_version_4_files_as_committed() {
+fn the_store_writes_its_files_as_committed() {
     let directory = tempfile::tempdir().unwrap();
-    write_version_4(directory.path());
-    let committed = vectors().join("store-v4");
+    write_store(directory.path());
+    let committed = vectors().join("store");
     assert_eq!(files(directory.path()), files(&committed));
     for name in files(&committed) {
         assert_eq!(
@@ -209,15 +158,16 @@ fn the_store_writes_version_4_files_as_committed() {
 }
 
 #[test]
-fn a_version_4_store_reads_as_committed() {
+fn the_committed_store_reads_back() {
     let directory = tempfile::tempdir().unwrap();
-    copy_tree(&vectors().join("store-v4"), directory.path());
+    copy_tree(&vectors().join("store"), directory.path());
     let (a, b) = (certificate("cert-a.pem"), certificate("cert-b.pem"));
-    let (one, two) = (example_key(), second_example_key());
+    let (one, two, three) = (example_key(), second_example_key(), third_example_key());
+    assert_eq!(read("example-key.id").trim(), one.id().canonical());
     let retires = T0 + 24 * 3600;
 
     let store = store_at(directory.path(), retires - 1);
-    assert!(store.is_accepted(&a.id()));
+    assert_eq!(store.accepted_key(&a.id()), Some(a.clone()));
     assert!(!store.is_accepted(&b.id()));
     assert_eq!(store.successor_key(&b.id()), Some(b.clone()));
     assert_eq!(
@@ -227,7 +177,7 @@ fn a_version_4_store_reads_as_committed() {
             new: b.id()
         }]
     );
-    assert!(store.is_accepted(&one.id()));
+    assert_eq!(store.accepted_key(&one.id()), Some(one.clone()));
     assert!(store.is_accepted(&two.id()));
     assert_eq!(
         store.retiring().unwrap(),
@@ -237,10 +187,15 @@ fn a_version_4_store_reads_as_committed() {
             retires: UNIX_EPOCH + Duration::from_secs(retires)
         }]
     );
+    let waiting = store.waiting().unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].id, three.id());
+    assert_eq!(waiting[0].source, Some("192.0.2.7:4000".parse().unwrap()));
     let invitations = store.invitations().unwrap();
     assert_eq!(invitations.len(), 1);
     assert_eq!(invitations[0].uses, 2);
     assert_eq!(invitations[0].label, "kitchen tablet");
+    assert_eq!(store.redeem(&secret()).unwrap().uses, 1);
 
     let later = store_at(directory.path(), retires);
     assert!(!later.is_accepted(&one.id()));
@@ -249,7 +204,27 @@ fn a_version_4_store_reads_as_committed() {
         ids.sort();
         ids
     });
-    let redeemed = store.redeem(&secret()).unwrap();
-    assert_eq!(redeemed.uses, 1);
     assert_eq!(later.promote_successor(&b.id()).unwrap(), a.id());
+    later.accept(&three.id()).unwrap();
+    assert_eq!(later.accepted_key(&three.id()), Some(three));
+}
+
+#[test]
+fn only_the_current_layout_is_read() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TrustStore::open(directory.path()).unwrap();
+    let a = certificate("cert-a.pem");
+    let accepted = directory.path().join("peers/accepted");
+    // A file without a `Method:` line, and one named by the grouped base32 spelling.
+    let pem = fs::read_to_string(vectors().join("cert-a.pem")).unwrap();
+    fs::write(accepted.join(format!("{}.pem", a.id().hex())), &pem).unwrap();
+    assert!(!store.is_accepted(&a.id()));
+    fs::remove_file(accepted.join(format!("{}.pem", a.id().hex()))).unwrap();
+    fs::write(
+        accepted.join(format!("{}.pem", a.id().to_base32_grouped())),
+        format!("Method: tls\n{pem}"),
+    )
+    .unwrap();
+    assert!(!store.is_accepted(&a.id()));
+    assert!(store.accepted().unwrap().is_empty());
 }

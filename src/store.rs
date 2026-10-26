@@ -16,18 +16,14 @@ use crate::id::PeerId;
 use crate::key::{KeyMaterial, decode_pem, encode_pem};
 use crate::random::Random;
 
-/// The version of the on-disk format [`TrustStore`] writes. Versions 1 to 3 stay readable.
-pub const FORMAT_VERSION: u32 = 4;
+/// The version of the on-disk format [`TrustStore`] writes and reads.
+pub const FORMAT_VERSION: u32 = 1;
 
 /// The longest invitation label, in bytes.
 pub const MAX_LABEL: usize = 128;
 
 /// Rotation events kept for [`TrustStore::take_rotation_events`]; older ones are dropped.
 const MAX_EVENTS: usize = 1024;
-
-/// The method of a file that has no `Method:` line: files of versions 1 and 2 only held
-/// certificates.
-const LEGACY_METHOD: &str = "tls";
 
 /// The IPv6 prefix length a waiting source is grouped by, unless the store is given another:
 /// one /64 is the usual end-site subnet, and its holder can use any address in it.
@@ -98,8 +94,7 @@ impl Default for InvitationOptions {
 pub struct WaitingEntry {
     /// The peer's id.
     pub id: PeerId,
-    /// The address the handshake came from; `None` when the caller did not know it, or for an
-    /// entry written before the store kept it.
+    /// The address the handshake came from; `None` when the caller did not know it.
     pub source: Option<SocketAddr>,
 }
 
@@ -281,7 +276,7 @@ pub enum RotationEvent {
 /// reads only the entries that name it. The id of an entry is the SHA-256 of its bytes; the
 /// store checks that when it reads a file.
 ///
-/// # On-disk format (version 4)
+/// # On-disk format (version 1)
 ///
 /// Under `<state_dir>/peers/`:
 ///
@@ -298,9 +293,7 @@ pub enum RotationEvent {
 /// or promoting successor) and `Retires: <unix seconds>`; in a successor file
 /// `Predecessor: <64 hex>`. An invitation file is header lines only: `Expires: <unix
 /// seconds>`, `Uses: <count>` and, when not empty, `Label: <text>`; it never holds the
-/// secret. Files of versions 1 and 2 have no `Method:` line and read as `tls`; version 1 files
-/// have no `Source:` line either. Names in the grouped base32 spelling are also read; new
-/// files are always written with the hex name. Accepting moves a file from `waiting/` to
+/// secret. A key file without a `Method:` line, or named otherwise, is not read. Accepting moves a file from `waiting/` to
 /// `accepted/`, rewritten without the `Source:` line.
 #[derive(Debug, Clone)]
 pub struct TrustStore {
@@ -664,6 +657,7 @@ impl TrustStore {
                 .filter(|extension| *extension == "inv")
                 .and_then(|_| path.file_stem())
                 .and_then(|stem| stem.to_str())
+                .filter(|stem| is_hex_name(stem))
                 .and_then(|stem| stem.parse::<InvitationId>().ok())
             else {
                 continue;
@@ -889,6 +883,7 @@ impl TrustStore {
                 && let Some(Ok(id)) = path
                     .file_stem()
                     .and_then(|stem| stem.to_str())
+                    .filter(|stem| is_hex_name(stem))
                     .map(str::parse::<PeerId>)
                 && !ids.contains(&id)
             {
@@ -909,18 +904,19 @@ impl TrustStore {
             .join(format!("{}.inv", id.hex()))
     }
 
-    /// The file for `id` in `section`, under either accepted spelling of the name.
+    /// The file for `id` in `section`, when it exists.
     fn existing(&self, section: &str, id: &PeerId) -> Option<PathBuf> {
-        let current = self.path(section, id);
-        if current.is_file() {
-            return Some(current);
-        }
-        let legacy = self
-            .root
-            .join(section)
-            .join(format!("{}.pem", id.to_base32_grouped()));
-        legacy.is_file().then_some(legacy)
+        let path = self.path(section, id);
+        path.is_file().then_some(path)
     }
+}
+
+/// Whether `stem` is a file name this store writes: 64 lowercase hexadecimal characters.
+fn is_hex_name(stem: &str) -> bool {
+    stem.len() == 64
+        && stem
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 /// The source an address counts against: IPv4 as it is, IPv4-mapped IPv6 as the IPv4 address,
@@ -980,11 +976,11 @@ fn parse_invitation(text: &str) -> Option<(u64, u32, String)> {
 /// Reads a store file: header lines, then one PEM block.
 fn parse(text: &str) -> Option<Entry> {
     let (headers, label, bytes) = decode_pem(text)?;
-    let mut method = LEGACY_METHOD;
+    let mut method = None;
     let (mut source, mut successor, mut retires, mut predecessor) = (None, None, None, None);
     for line in headers {
         if let Some(value) = line.strip_prefix("Method: ") {
-            method = value.trim();
+            method = Some(value.trim());
         } else if let Some(value) = line.strip_prefix("Source: ") {
             source = value.trim().parse().ok();
         } else if let Some(value) = line.strip_prefix("Successor: ") {
@@ -996,7 +992,7 @@ fn parse(text: &str) -> Option<Entry> {
         }
     }
     Some(Entry {
-        key: KeyMaterial::new(method, label, bytes).ok()?,
+        key: KeyMaterial::new(method?, label, bytes).ok()?,
         source,
         successor,
         retires,

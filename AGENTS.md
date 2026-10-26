@@ -61,7 +61,7 @@ pub const MAX_KEY_BYTES: usize = 65536;
 pub struct TrustStore;                     // Clone
 pub struct WaitingLimits { pub per_source: usize, pub total: usize, pub rerecord: Duration }   // Default: 16, 1000, 60 s
 pub struct WaitingEntry { pub id: PeerId, pub source: Option<SocketAddr> }
-pub const FORMAT_VERSION: u32 = 4;
+pub const FORMAT_VERSION: u32 = 1;
 impl TrustStore {
     pub fn open(state_dir: &Path) -> Result<TrustStore, Error>;        // creates <state_dir>/peers/{accepted,waiting}
     pub fn with_limits(self, limits: WaitingLimits) -> TrustStore;
@@ -195,7 +195,7 @@ has no `PeerId` to put in `Established` (`coqui-peer-tls`'s `TlsHandshake::finis
 `InvalidOptions`, `InvalidCode`, `Random`, `Io(io::Error)`. `Display` never includes key
 material, secrets or paths.
 
-## On-disk store format (version 4)
+## On-disk store format (version 1)
 
 For peers in other languages. UTF-8, LF. Under `<state_dir>/peers/`: `accepted/`, `waiting/`
 and `successors/` hold `<64 lowercase hex>.pem`, the name being the SHA-256 id of the key bytes
@@ -224,10 +224,8 @@ Uses: 2                       redemptions left, at least 1
 Label: kitchen tablet         optional, one line
 ```
 
-Files without `Method:` (versions 1 and 2) read as `tls`; version 1 files have no `Source:`
-and may be named by the grouped base32 spelling, which is also read. Accepting rewrites a
-waiting file without `Source:`. A version 3 store is a version 4 store with none of the new
-lines or directories. Vectors: `tests/vectors/store-v{1,2,3,4}`, `*.fingerprint` (canonical,
-bare hex, grouped base32), `example-key.id`, checked by `tests/vectors.rs`; `store-v4` is
-written at unix time 1800000000 with the invitation secret `0x40..=0x5f`. Format changes bump
-the version and the changelog; older versions stay readable.
+`Method:` is required, and a file named other than by 64 lowercase hex is not read.
+Accepting rewrites a waiting file without `Source:`. Vectors: `tests/vectors/store`,
+`*.fingerprint` (canonical, bare hex, grouped base32), `example-key.id`, checked by
+`tests/vectors.rs`; the store tree is written at unix time 1800000000 with the invitation
+secret `0xa0..=0xbf`.

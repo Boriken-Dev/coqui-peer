@@ -7,29 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+
 ### Added
 
-- `coqui-peer`, the method-independent core, extracted from
-  [Boriken-Dev/coqui-peer-tls](https://github.com/Boriken-Dev/coqui-peer-tls). The code moved
-  from there; this repository starts with a fresh history.
-  - `PeerId` (was `Fingerprint`): canonical text `<alg>:<hash>`, parsing of bare hex, colon
-    hex and grouped base32, a digest allow-list type and constant-time equality.
-  - `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits`: the accepted and waiting
-    store with per-source caps and the rerecord interval. On-disk format version 3 records the
-    method name beside the key bytes (`Method:` line); versions 1 and 2 still read, as `tls`.
-  - `KeyMaterial`: the bytes, PEM label and method name a method gives the store.
-  - The pairing flow and the contract that a peer is recorded only after it proved its key.
-  - A sans-IO `Handshake` / `Method` pair that works over streams and message transports,
-    with blocking helpers and, behind `tokio`, async ones.
-
-- `TrustStore::with_ipv6_prefix(bits)`: the IPv6 prefix length waiting sources are grouped
-  by, 64 by default.
-- `complete_stream` and `complete_messages` (and their `asynch` forms): the loops of
-  `drive_stream` and `drive_messages` that return the completed handshake instead of calling
-  `finish`, for a method whose outcome has no verified peer to report, such as a TLS server
-  that leaves client authentication to the application. `drive_*` are unchanged in
-  behaviour and now call them.
-
+- `PeerId` and `Digest`: canonical text `<alg>:<hash>`, parsing of bare hex, colon hex and
+  grouped base32, a digest allow-list type and constant-time equality.
+- `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits`: accepted and waiting peers on
+  disk (format version 1), each file recording the method name beside the key bytes (`Method:` line), with
+  per-source caps (IPv4 per address, an IPv4-mapped IPv6 address as its IPv4 address, IPv6 by
+  a prefix of `with_ipv6_prefix` bits, /64 by default) and the rerecord interval.
+- `KeyMaterial`: the bytes, PEM label and method name a method gives the store.
+- The pairing flow and the contract that a peer is recorded only after it proved its key.
+- A sans-IO `Handshake` / `Method` pair that works over streams and message transports, with
+  blocking helpers (`drive_stream`, `drive_messages`, and `complete_stream` /
+  `complete_messages`, which return the completed handshake for a method-specific finish)
+  and, behind `tokio`, async ones.
 - Invitations in the `TrustStore`: `invite` (a 32-byte secret from a caller-supplied
   `Random`, `InvitationOptions` for validity and uses), `redeem` (atomic, one use at a time),
   `invitations` and `revoke_invitation`. The store keeps only the SHA-256 of the secret.
@@ -38,18 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   default 24 hours; `require_approval`). A promoted key's predecessor is refused from its
   retirement time on.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
-  secure random source; `Random::os` with the new `pin` feature).
-- `Error::{NotAccepted, NoSuccessor, NotInvited, Expired, InvalidOptions, InvalidCode, Random}`.
-
-### Changed
-
-- On-disk store format version 4: `successors/` and `invitations/` directories, and
-  `Successor:` / `Retires:` header lines in accepted files. Versions 1 to 3 still read; a
-  version 3 store is a version 4 store with none of the new lines.
-- The per-source waiting limits (`per_source`, `rerecord`) count an IPv6 source by its /64
-  prefix, not by address, so one subnet's holder can no longer fill the queue from many
-  addresses. IPv4 sources still count per address, and an IPv4-mapped IPv6 address counts as
-  its IPv4 address. The full address is still stored with each entry.
+  secure random source; `Random::os` with the `pin` feature).
 
 Depend on this repository by revision:
 `coqui-peer = { git = "https://github.com/Boriken-Dev/coqui-peer", rev = "<commit>" }`.

@@ -82,7 +82,7 @@ wants TOML or JSON reads them with its own `toml` or `serde_json`.
 | Item | Purpose |
 | --- | --- |
 | `PeerId`, `Digest` | Id text forms, digest allow-lists, constant-time equality. |
-| `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits` | Pairing store (format version 4; 1 to 3 are read). |
+| `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits` | Pairing store on disk. |
 | `Invitation`, `InvitationOptions`, `RotationOptions`, `RotationEvent` | Invitations and successor keys in the store. |
 | `Clock`, `Random` | The wall clock and secure random source you pass in. |
 | `KeyMaterial` | `method`, PEM `label` and `bytes` kept by the store. |
