@@ -525,3 +525,36 @@ fn a_new_announcement_replaces_the_pending_successor() {
         Err(Error::Material)
     ));
 }
+
+#[test]
+fn an_accepted_key_cannot_claim_another_keys_successor() {
+    let (_directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store.with_clock(hand.clock());
+    let (rotating, other, successor) = (key("example", 1), key("example", 2), key("example", 3));
+    store.accept_key(&rotating).unwrap();
+    store.accept_key(&other).unwrap();
+    store
+        .announce_successor(&rotating.id(), &successor)
+        .unwrap();
+    // The other peer learned the successor and announces it as its own.
+    assert!(matches!(
+        store.announce_successor(&other.id(), &successor),
+        Err(Error::SuccessorTaken)
+    ));
+    assert_eq!(
+        store.successors().unwrap(),
+        [Successor {
+            old: rotating.id(),
+            new: successor.id()
+        }]
+    );
+    // Promotion retires the key that announced it, and only that one.
+    assert_eq!(
+        store.promote_successor(&successor.id()).unwrap(),
+        rotating.id()
+    );
+    hand.advance(24 * 3600);
+    assert!(!store.is_accepted(&rotating.id()));
+    assert!(store.is_accepted(&other.id()));
+}

@@ -132,8 +132,10 @@ choice and only widen who may redeem it.
 
 **Rotation.** `announce_successor(old, new)` is for a key the holder of `old` sent over a
 session `old` authenticated; `old` must be accepted and not retiring (`NotAccepted`), `new`
-not accepted (`AlreadyAccepted`) and not `old` (`Material`); a later announcement replaces the
-pending one. A method calls `promote_successor(new)` once the peer proves `new` in a handshake,
+not accepted (`AlreadyAccepted`), not `old` (`Material`), and not the pending successor of
+another key that is still accepted (`SuccessorTaken`: otherwise a peer that learned someone
+else's successor could claim it, and promoting it would retire the wrong key); a later
+announcement replaces the pending one. A method calls `promote_successor(new)` once the peer proves `new` in a handshake,
 unless `RotationOptions::require_approval` (then the caller calls it to approve). Promotion
 accepts `new` and gives `old` `Retires: now + retire_after`; from then on `is_accepted(old)`,
 `accepted_key(old)` and `accepted()` drop it. `retire_after` zero cuts the old key off at

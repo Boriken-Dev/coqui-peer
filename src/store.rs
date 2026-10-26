@@ -699,7 +699,8 @@ impl TrustStore {
     /// # Errors
     ///
     /// [`Error::NotAccepted`] when `old` is not accepted or is already retiring;
-    /// [`Error::AlreadyAccepted`] when `new` is accepted; [`Error::Material`] when `new` is not
+    /// [`Error::AlreadyAccepted`] when `new` is accepted; [`Error::SuccessorTaken`] when `new` is
+    /// the pending successor of another key that is still accepted; [`Error::Material`] when `new` is not
     /// valid or is `old`; [`Error::Io`] on write failure.
     pub fn announce_successor(&self, old: &PeerId, new: &KeyMaterial) -> Result<(), Error> {
         new.check()?;
@@ -713,6 +714,16 @@ impl TrustStore {
             .ok_or(Error::NotAccepted)?;
         if self.existing("accepted", &new_id).is_some() {
             return Err(Error::AlreadyAccepted);
+        }
+        // Another accepted key that announced `new` keeps it: overwriting would let a peer that
+        // learned someone else's successor claim it, and promoting it would retire the wrong key.
+        if self.successor_key(&new_id).is_some()
+            && self
+                .read("successors", &new_id)
+                .and_then(|pending| pending.predecessor)
+                .is_some_and(|predecessor| predecessor != *old)
+        {
+            return Err(Error::SuccessorTaken);
         }
         if let Some(previous) = entry.successor
             && previous != new_id

@@ -22,6 +22,8 @@ pub enum Error {
     NotAccepted,
     /// The key is not the pending successor of an accepted key.
     NoSuccessor,
+    /// The key is the pending successor another accepted key announced.
+    SuccessorTaken,
     /// No open invitation has this secret: it never existed, was used up or was revoked.
     NotInvited,
     /// The invitation or code expired.
@@ -53,6 +55,9 @@ impl fmt::Display for Error {
             Self::AlreadyAccepted => formatter.write_str("peer is already accepted"),
             Self::NotAccepted => formatter.write_str("peer is not accepted or is retiring"),
             Self::NoSuccessor => formatter.write_str("key is not a pending successor"),
+            Self::SuccessorTaken => {
+                formatter.write_str("key is the pending successor of another accepted key")
+            }
             Self::NotInvited => formatter.write_str("no open invitation has this secret"),
             Self::Expired => formatter.write_str("invitation or code expired"),
             Self::InvalidOptions => formatter.write_str("an option has no meaning"),
