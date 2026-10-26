@@ -223,7 +223,7 @@ pub struct PairingJoiner;      // transmit() -> Option<Vec<u8>>, receive(&[u8]) 
 pub struct PairingResponder;   // new(Channel, &TrustStore, &PairingDesk, source: Option<SocketAddr>);
                                // transmit, receive, awaiting() -> Option<Ticket>, resume(Decision),
                                // joiner() -> Option<&KeyMaterial>, deadline() -> Option<SystemTime>,
-                               // check_deadline(), is_complete(), finish()
+                               // time_left() -> Option<Duration>, check_deadline(), is_complete(), finish()
 #[non_exhaustive] pub enum Shown { Pin(PairingCode), UserCode { code: UserCode, expires: SystemTime } }
 pub struct Paired { pub peer: KeyMaterial, pub mode: Mode }
 #[non_exhaustive] pub enum Mode { Invitation, Pin, Device }
@@ -366,7 +366,7 @@ is not counted. A desk with fewer free codes than pending device joiners refuses
 clock: `pin_ttl` for a PIN, `device_ttl` for the device flow (an invitation ends with that
 message). `receive` and `resume` refuse past it, and `check_deadline()` ends a stalled exchange
 (`Expired` to the joiner, its slot or code released). A transport reads with a timeout up to the
-deadline and calls `check_deadline` when it fires; before the first message the transport's
+deadline and calls `check_deadline` when it fires (`time_left()` is that timeout); before the first message the transport's
 own timeout applies (coqui-peer-tls: `PairConfig::timeout`).
 
 **Waiting.** A responder that waits for the operator returns its `Ticket` from `awaiting()`;

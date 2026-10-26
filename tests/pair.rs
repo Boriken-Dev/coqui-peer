@@ -941,7 +941,9 @@ fn a_stalled_exchange_ends_at_its_deadline_and_frees_its_code() {
     // The joiner stalls; the transport times out and checks.
     world.hand.advance(599);
     assert!(responder.check_deadline().is_ok());
+    assert_eq!(responder.time_left(), Some(Duration::from_secs(1)));
     world.hand.advance(1);
+    assert_eq!(responder.time_left(), Some(Duration::ZERO));
     assert!(matches!(
         responder.check_deadline(),
         Err(PairingError::Refused(PairRefusal::Expired))

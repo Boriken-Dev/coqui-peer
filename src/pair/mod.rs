@@ -28,7 +28,7 @@ mod pin;
 use std::collections::VecDeque;
 use std::fmt;
 use std::net::SocketAddr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use zeroize::Zeroizing;
 
@@ -765,6 +765,13 @@ impl PairingResponder {
     /// reads with a timeout up to it, then calls [`check_deadline`](PairingResponder::check_deadline).
     pub fn deadline(&self) -> Option<SystemTime> {
         self.deadline
+    }
+
+    /// How long until the [`deadline`](PairingResponder::deadline), on the desk's clock: zero
+    /// once it passed, `None` while there is none. A transport's read timeout.
+    pub fn time_left(&self) -> Option<Duration> {
+        self.deadline
+            .map(|deadline| deadline.duration_since(self.desk.now()).unwrap_or_default())
     }
 
     /// Ends the exchange once its [`deadline`](PairingResponder::deadline) passed: the joiner is
