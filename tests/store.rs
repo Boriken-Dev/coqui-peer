@@ -333,19 +333,22 @@ fn an_invitation_with_uses_counts_them_down() {
 #[test]
 fn concurrent_redemptions_of_one_use_succeed_once() {
     let (_directory, store) = store();
-    let invitation = store
-        .invite(&counting(), InvitationOptions::default(), "")
-        .unwrap();
-    let wins: usize = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..8)
-            .map(|_| scope.spawn(|| store.redeem(&invitation.secret).is_ok()))
-            .collect();
-        handles
-            .into_iter()
-            .map(|handle| usize::from(handle.join().unwrap()))
-            .sum()
-    });
-    assert_eq!(wins, 1);
+    // Many rounds: the race shows only now and then.
+    for round in 0..50 {
+        let invitation = store
+            .invite(&counting(), InvitationOptions::default(), "")
+            .unwrap();
+        let wins: usize = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..8)
+                .map(|_| scope.spawn(|| store.redeem(&invitation.secret).is_ok()))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| usize::from(handle.join().unwrap()))
+                .sum()
+        });
+        assert_eq!(wins, 1, "round {round}");
+    }
 }
 
 #[test]

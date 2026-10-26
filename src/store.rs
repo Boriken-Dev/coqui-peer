@@ -608,33 +608,34 @@ impl TrustStore {
                 Error::Io(error)
             });
         }
-        let text = fs::read_to_string(&claimed);
-        let parsed = text
+        let text = fs::read_to_string(&claimed).ok();
+        // Removing the claimed file decides the claim. A rename is not enough: on Windows a
+        // redeemer that opened the file before another moved it can still move it again, but a
+        // file is removed only once.
+        if fs::remove_file(&claimed).is_err() {
+            return Err(Error::NotInvited);
+        }
+        let (expires, uses, label) = text
             .as_deref()
-            .ok()
             .and_then(parse_invitation)
-            .ok_or(Error::NotInvited);
-        let result = parsed.and_then(|(expires, uses, label)| {
-            if self.clock.now() >= from_unix_seconds(expires) {
-                return Err(Error::Expired);
-            }
-            let left = uses - 1;
-            if left > 0 {
-                // Losing the remaining uses on a write failure fails closed.
-                let _ = write_new(
-                    &path,
-                    &invitation_text(from_unix_seconds(expires), left, &label),
-                );
-            }
-            Ok(Invitation {
-                secret: *secret,
-                expires: from_unix_seconds(expires),
-                uses: left,
-                label,
-            })
-        });
-        let _ = fs::remove_file(&claimed);
-        result
+            .ok_or(Error::NotInvited)?;
+        if self.clock.now() >= from_unix_seconds(expires) {
+            return Err(Error::Expired);
+        }
+        let left = uses - 1;
+        if left > 0 {
+            // Losing the remaining uses on a write failure fails closed.
+            let _ = write_new(
+                &path,
+                &invitation_text(from_unix_seconds(expires), left, &label),
+            );
+        }
+        Ok(Invitation {
+            secret: *secret,
+            expires: from_unix_seconds(expires),
+            uses: left,
+            label,
+        })
     }
 
     /// The open invitations, sorted by id, expired ones included until redeemed or revoked.
@@ -1056,11 +1057,15 @@ fn replace(path: &Path, text: &str) -> io::Result<()> {
     result
 }
 
+/// A name beside `path` that no other call of this process uses, and that another process is
+/// unlikely to: the process id, the time and a counter.
 fn temporary_path(path: &Path) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let count = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.{}.tmp", std::process::id(), nonce));
+    name.push(format!(".{}.{}.{}.tmp", std::process::id(), nonce, count));
     path.with_file_name(name)
 }
