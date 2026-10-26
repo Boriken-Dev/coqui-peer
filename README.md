@@ -21,6 +21,9 @@ See the [documentation](https://boriken-dev.github.io/coqui-peer/).
   by /64, configurable), a rerecord interval and the pairing flow: record waiting, the
   operator accepts or removes by id.
   It keeps whatever key bytes a method gives it and records the method name beside them.
+- **Invitations and key rotation** — one-time pairing secrets the store keeps only as a hash,
+  redeemed atomically; a peer announces its successor key under its current one, the
+  successor is promoted once proven, and the old key retires after a window you choose.
 - **A key-proof contract** — a peer is recorded as waiting only after it proved it holds the
   key it presented. Every method must meet it; it is documented on `TrustStore`.
 - **A sans-IO `Handshake`** — the caller feeds received bytes or messages in and gets bytes or
@@ -39,6 +42,7 @@ cargo add coqui-peer --git https://github.com/Boriken-Dev/coqui-peer
 | --- | --- | --- |
 | `serde` | `serde` | reading and writing `PeerId` and `Digest` as text, in the format you choose |
 | `tokio` | `tokio` (`io-util`) | `asynch::drive_stream`, `asynch::drive_messages`, `asynch::complete_stream`, `asynch::complete_messages` |
+| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` | `Random::os` |
 
 ## Quick start
 
@@ -78,7 +82,9 @@ wants TOML or JSON reads them with its own `toml` or `serde_json`.
 | Item | Purpose |
 | --- | --- |
 | `PeerId`, `Digest` | Id text forms, digest allow-lists, constant-time equality. |
-| `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits` | Pairing store (format version 3; 1 and 2 are read). |
+| `TrustStore`, `WaitingEntry { id, source }`, `WaitingLimits` | Pairing store (format version 4; 1 to 3 are read). |
+| `Invitation`, `InvitationOptions`, `RotationOptions`, `RotationEvent` | Invitations and successor keys in the store. |
+| `Clock`, `Random` | The wall clock and secure random source you pass in. |
 | `KeyMaterial` | `method`, PEM `label` and `bytes` kept by the store. |
 | `Handshake`, `Method`, `Established`, `Framing` | The sans-IO trait. |
 | `drive_stream`, `drive_messages`, `MessageTransport`, `asynch::*` | Loops over a transport. |
