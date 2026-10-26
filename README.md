@@ -17,8 +17,9 @@ See the [documentation](https://boriken-dev.github.io/coqui-peer/).
 
 - **`PeerId`** — a peer's id as `<alg>:<hash>` text (`sha256:3f15...`), parsed from the forms
   people paste (bare hex, colon-separated hex, grouped base32), compared in constant time.
-- **`TrustStore`** — accepted and waiting peers on disk, with per-source caps, a rerecord
-  interval and the pairing flow: record waiting, the operator accepts or removes by id.
+- **`TrustStore`** — accepted and waiting peers on disk, with per-source caps (IPv6 grouped
+  by /64, configurable), a rerecord interval and the pairing flow: record waiting, the
+  operator accepts or removes by id.
   It keeps whatever key bytes a method gives it and records the method name beside them.
 - **A key-proof contract** — a peer is recorded as waiting only after it proved it holds the
   key it presented. Every method must meet it; it is documented on `TrustStore`.

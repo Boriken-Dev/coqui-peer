@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   - A sans-IO `Handshake` / `Method` pair that works over streams and message transports,
     with blocking helpers and, behind `tokio`, async ones.
 
+- `TrustStore::with_ipv6_prefix(bits)`: the IPv6 prefix length waiting sources are grouped
+  by, 64 by default.
+
+### Changed
+
+- The per-source waiting limits (`per_source`, `rerecord`) count an IPv6 source by its /64
+  prefix, not by address, so one subnet's holder can no longer fill the queue from many
+  addresses. IPv4 sources still count per address, and an IPv4-mapped IPv6 address counts as
+  its IPv4 address. The full address is still stored with each entry.
+
 Depend on this repository by revision:
 `coqui-peer = { git = "https://github.com/Boriken-Dev/coqui-peer", rev = "<commit>" }`.
 The crate is not published to crates.io.

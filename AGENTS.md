@@ -64,6 +64,7 @@ pub const FORMAT_VERSION: u32 = 3;
 impl TrustStore {
     pub fn open(state_dir: &Path) -> Result<TrustStore, Error>;        // creates <state_dir>/peers/{accepted,waiting}
     pub fn with_limits(self, limits: WaitingLimits) -> TrustStore;
+    pub fn with_ipv6_prefix(self, bits: u8) -> TrustStore;            // default 64; above 128 is 128
     pub fn waiting(&self) -> Result<Vec<WaitingEntry>, Error>;
     pub fn accepted(&self) -> Result<Vec<PeerId>, Error>;
     pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial>;
@@ -83,9 +84,12 @@ them unproven lets a stranger queue somebody else's identity. A failed proof rec
 
 Pairing: a server turns away an untrusted, key-proven peer and records it; the operator lists
 `waiting`, then `accept`s or `remove`s by id; the next handshake finds `is_accepted`.
-`record_waiting` is bounded: invalid keys ignored, at most `per_source` entries per source IP
-(the oldest of that source is replaced), the same peer from the same IP at most every
-`rerecord`, `total` in all. `None` sources share one bucket. `is_accepted` and the `*_key`
+`record_waiting` is bounded: invalid keys ignored, at most `per_source` entries per source
+(the oldest of that source is replaced), the same peer from the same source at most every
+`rerecord`, `total` in all. A source is an IPv4 address (an IPv4-mapped IPv6 address counts as
+its IPv4 address) or an IPv6 prefix of `with_ipv6_prefix` bits, /64 by default, since one
+holder controls every address of a /64; 128 counts each IPv6 address alone. The full address
+is still stored with the entry. `None` sources share one bucket. `is_accepted` and the `*_key`
 readers check that the stored bytes hash to the id.
 
 ## Handshake, Method, drivers
