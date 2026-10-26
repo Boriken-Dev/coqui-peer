@@ -6,7 +6,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::task::{Context, Poll, Waker};
 use std::time::{Duration, SystemTime};
 
-use crate::clock::Clock;
+use crate::clock::{Clock, later};
 use crate::error::Error;
 use crate::id::PeerId;
 use crate::pair::code::{CodeAlphabet, PairingCode, Pin, UserCode, below, same};
@@ -301,7 +301,11 @@ struct Waiting {
     source: Option<SocketAddr>,
     label: String,
     expires: SystemTime,
+    /// The decision, until the responder takes it.
     decision: Option<Decision>,
+    /// Whether a decision was made: a settled entry is listed and decided no more, even after
+    /// its decision was taken.
+    settled: bool,
     waker: Option<Waker>,
 }
 
@@ -407,14 +411,25 @@ impl State {
             changed = true;
         }
         for waiting in self.waiting.values_mut() {
-            if waiting.decision.is_none() && now >= waiting.expires {
+            if !waiting.settled && now >= waiting.expires {
                 waiting.decision = Some(Decision::Expired);
+                waiting.settled = true;
                 if let Some(waker) = waiting.waker.take() {
                     waker.wake();
                 }
                 changed = true;
             }
         }
+        // Buckets of past windows go, so the maps stay as large as the recent traffic.
+        let (ttl, window) = (self.options.pin_ttl, self.limits.approver_window);
+        self.runs.retain(|_, times| {
+            prune(times, now, ttl);
+            !times.is_empty()
+        });
+        self.wrong_by.retain(|_, times| {
+            prune(times, now, window);
+            !times.is_empty()
+        });
         changed
     }
 
@@ -422,9 +437,10 @@ impl State {
         let waiting = self
             .waiting
             .get_mut(&ticket.0)
-            .filter(|waiting| waiting.decision.is_none())
+            .filter(|waiting| !waiting.settled)
             .ok_or(PairingError::Refused(PairRefusal::Expired))?;
         waiting.decision = Some(decision);
+        waiting.settled = true;
         if let Some(waker) = waiting.waker.take() {
             waker.wake();
         }
@@ -511,7 +527,7 @@ impl PairingDesk {
         let pin = Pin::generate(&state.options.pin_alphabet, &state.random)?;
         let shown = ShownPin {
             pin,
-            expires: state.clock.now() + state.options.pin_ttl,
+            expires: later(state.clock.now(), state.options.pin_ttl),
         };
         state.shown = Some((shown.clone(), state.options.pin_attempts));
         Ok(shown)
@@ -538,7 +554,7 @@ impl PairingDesk {
         let mut slots: Vec<PendingSlot> = state
             .waiting
             .values()
-            .filter(|waiting| waiting.decision.is_none())
+            .filter(|waiting| !waiting.settled)
             .filter_map(|waiting| match waiting.kind {
                 Kind::Slot(slot) => Some(PendingSlot {
                     slot,
@@ -567,7 +583,7 @@ impl PairingDesk {
             .waiting
             .iter()
             .find(|(_, waiting)| {
-                waiting.decision.is_none()
+                !waiting.settled
                     && matches!(waiting.kind, Kind::Slot(slot) if Some(slot) == code.slot)
             })
             .map(|(id, _)| Ticket(*id))
@@ -610,7 +626,7 @@ impl PairingDesk {
         let mut found = None;
         for (id, waiting) in &state.waiting {
             if let Kind::Device(issued) = &waiting.kind
-                && waiting.decision.is_none()
+                && !waiting.settled
                 && same(issued.as_str(), entered.as_str())
             {
                 found = Some(PendingDevice {
@@ -793,7 +809,7 @@ impl PairingDesk {
             return Err(PairingError::Refused(PairRefusal::Throttled));
         }
         let slot = free[below(&state.random, free.len()).map_err(PairingError::Local)?];
-        let expires = state.clock.now() + state.options.pin_ttl;
+        let expires = later(state.clock.now(), state.options.pin_ttl);
         state.waiting.insert(
             admission.id,
             Waiting {
@@ -803,6 +819,7 @@ impl PairingDesk {
                 label: String::new(),
                 expires,
                 decision: None,
+                settled: false,
                 waker: None,
             },
         );
@@ -841,7 +858,7 @@ impl PairingDesk {
             }
         }
         let code = code.ok_or(PairingError::Refused(PairRefusal::Throttled))?;
-        let expires = state.clock.now() + state.options.device_ttl;
+        let expires = later(state.clock.now(), state.options.device_ttl);
         state.waiting.insert(
             admission.id,
             Waiting {
@@ -851,6 +868,7 @@ impl PairingDesk {
                 label: label.to_owned(),
                 expires,
                 decision: None,
+                settled: false,
                 waker: None,
             },
         );
@@ -881,5 +899,40 @@ impl Future for Decided {
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::UNIX_EPOCH;
+
+    #[test]
+    fn the_buckets_of_past_windows_are_dropped() {
+        let now = Arc::new(AtomicU64::new(1_800_000_000));
+        let seen = now.clone();
+        let clock =
+            Clock::from_fn(move || UNIX_EPOCH + Duration::from_secs(seen.load(Ordering::SeqCst)));
+        let desk = PairingDesk::new(Random::from_fn(|out| {
+            out.fill(7);
+            Ok(())
+        }))
+        .with_clock(clock)
+        .with_limits(DeskLimits {
+            wrong_codes_total: 1000,
+            ..DeskLimits::default()
+        });
+        for host in 0..200u8 {
+            let source = SocketAddr::from(([192, 0, 2, host], 1000));
+            desk.pin_run(Some(source)).unwrap();
+            let _ = desk.find_device(&format!("approver {host}"), "BBBBBBBB");
+        }
+        assert_eq!(desk.state().runs.len(), 200);
+        assert_eq!(desk.state().wrong_by.len(), 200);
+        now.fetch_add(600, Ordering::SeqCst);
+        desk.sweep();
+        assert!(desk.state().runs.is_empty());
+        assert!(desk.state().wrong_by.is_empty());
     }
 }

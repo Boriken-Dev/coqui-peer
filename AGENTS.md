@@ -348,7 +348,8 @@ weaker than the default, and these are the costs:
   holder count as many sources.
 
 Only meaningless values are errors (`InvalidOptions`): an empty alphabet, a repeated or
-control character, length 0, zero TTL or attempts.
+control character, length 0, zero TTL or attempts. A TTL of `Duration::MAX` means never; times
+saturate instead of overflowing.
 
 **Throttles** (`DeskLimits`). At most `pending` exchanges at once, and `pending_per_source`
 from one source, in every mode (`Throttled`); at most
@@ -370,7 +371,8 @@ own timeout applies (coqui-peer-tls: `PairConfig::timeout`).
 drive it with `desk.wait(ticket)` (rechecks expiry every second on the system clock) or
 `desk.decided(ticket).await` (woken by a decision or by `sweep`; an async driver sweeps now and
 then), then `resume(decision)`. Expiry follows the desk's `Clock`; under an injected clock
-call `sweep` after moving it. Dropping a responder releases its pending slot or code.
+call `sweep` after moving it. Dropping a responder releases its pending slot or code. A slot or code that was decided (or expired) is listed
+and decided no more, also after its responder took the decision.
 
 **Rotation message.** `Rotation::announce(&successor)` is the message a peer sends over a
 session its current key authenticated; the receiver `parse`s it and calls

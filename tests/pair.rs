@@ -1094,3 +1094,65 @@ fn a_label_or_code_that_could_read_as_another_is_refused_on_receipt() {
         ));
     }
 }
+
+#[test]
+fn ttls_of_duration_max_mean_never_and_do_not_overflow() {
+    let world = fresh();
+    let desk = world
+        .desk
+        .clone()
+        .with_options(PairingOptions {
+            pin_ttl: Duration::MAX,
+            device_ttl: Duration::MAX,
+            ..PairingOptions::default()
+        })
+        .unwrap();
+    let shown = desk.show_pin().unwrap();
+    assert!(shown.expires > UNIX_EPOCH + Duration::from_secs(T0 + 365 * 86_400));
+    let mut responder =
+        PairingResponder::new(proven(&key(2), &key(1), b""), &world.store, &desk, None);
+    let mut joiner = Pairing::device("")
+        .join(proven(&key(1), &key(2), b""))
+        .unwrap();
+    responder.receive(&joiner.transmit().unwrap()).unwrap();
+    joiner.receive(&responder.transmit().unwrap()).unwrap();
+    assert!(responder.deadline().is_some());
+    world.hand.advance(10 * 365 * 86_400);
+    assert!(responder.check_deadline().is_ok());
+}
+
+#[cfg(feature = "pin")]
+#[test]
+fn a_decided_slot_is_listed_and_taken_no_more() {
+    use coqui_peer::pair::{Pin, PinRole};
+    let world = fresh();
+    let pin = Pin::parse(&CodeAlphabet::pin(), "482913").unwrap();
+    let mut joiner = Pairing::pin(pin, PinRole::Shown)
+        .with_random(counting(1))
+        .join(proven(&key(1), &key(2), b""))
+        .unwrap();
+    let mut responder = PairingResponder::new(
+        proven(&key(2), &key(1), b""),
+        &world.store,
+        &world.desk,
+        None,
+    );
+    responder.receive(&joiner.transmit().unwrap()).unwrap();
+    joiner.receive(&responder.transmit().unwrap()).unwrap();
+    responder.receive(&joiner.transmit().unwrap()).unwrap();
+    let Some(Shown::Pin(code)) = joiner.shown().cloned() else {
+        panic!("expected a PIN")
+    };
+    world.desk.submit_code(&code).unwrap();
+    assert!(world.desk.slots().is_empty());
+    assert!(matches!(
+        world.desk.submit_code(&code),
+        Err(PairingError::Refused(PairRefusal::WrongCode))
+    ));
+    // Taking the decision does not bring the slot back.
+    let ticket = responder.awaiting().unwrap();
+    let decision = world.desk.wait(ticket);
+    assert!(world.desk.slots().is_empty());
+    assert!(world.desk.submit_code(&code).is_err());
+    responder.resume(decision).unwrap();
+}
