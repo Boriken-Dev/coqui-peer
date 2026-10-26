@@ -1030,3 +1030,67 @@ fn pending_exchanges_are_bounded_per_source_in_every_mode() {
         .unwrap();
     assert!(fourth.receive(&joiner.transmit().unwrap()).is_ok());
 }
+
+/// A message as the wire carries it: the version, a tag, then fields.
+fn message(tag: u8, fields: &[&[u8]]) -> Vec<u8> {
+    let mut out = vec![1, tag];
+    for field in fields {
+        out.extend_from_slice(field);
+    }
+    out
+}
+
+fn short(bytes: &[u8]) -> Vec<u8> {
+    let mut out = vec![bytes.len() as u8];
+    out.extend_from_slice(bytes);
+    out
+}
+
+fn wire_key(key: &KeyMaterial) -> Vec<u8> {
+    let mut out = short(key.method.as_bytes());
+    out.extend(short(key.label.as_bytes()));
+    out.extend_from_slice(&(key.bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(&key.bytes);
+    out
+}
+
+#[test]
+fn a_label_or_code_that_could_read_as_another_is_refused_on_receipt() {
+    for bad in ["two\nlines", "evil\u{202E}txt", "\u{2066}x", "tab\there"] {
+        // A joiner refuses to send it.
+        assert!(matches!(
+            Pairing::device(bad).join(proven(&key(1), &key(2), b"")),
+            Err(PairingError::Local(Error::InvalidOptions))
+        ));
+        // A responder refuses to receive it from a joiner that sent it anyway.
+        let world = fresh();
+        let mut responder = PairingResponder::new(
+            proven(&key(2), &key(1), b""),
+            &world.store,
+            &world.desk,
+            None,
+        );
+        let hello = message(1, &[&[3], &wire_key(&key(1)), &short(bad.as_bytes())]);
+        assert!(matches!(
+            responder.receive(&hello),
+            Err(PairingError::Protocol)
+        ));
+        // A joiner refuses a user code that is not plain text.
+        let mut joiner = Pairing::device("")
+            .join(proven(&key(1), &key(2), b""))
+            .unwrap();
+        joiner.transmit().unwrap();
+        let issued = message(
+            6,
+            &[
+                &wire_key(&key(2)),
+                &short(bad.as_bytes()),
+                &1_900_000_000u64.to_be_bytes(),
+            ],
+        );
+        assert!(matches!(
+            joiner.receive(&issued),
+            Err(PairingError::Protocol)
+        ));
+    }
+}

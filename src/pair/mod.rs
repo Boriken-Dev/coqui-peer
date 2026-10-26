@@ -351,7 +351,7 @@ impl Pairing {
     /// inviter's key, and for the device flow over a channel that did not verify the responder
     /// unless allowed;
     /// [`PairingError::Local`] with [`Error::InvalidOptions`] for a device label longer than
-    /// 255 bytes or with a control character.
+    /// 255 bytes or with a control or bidirectional formatting character.
     pub fn join(self, channel: Channel) -> Result<PairingJoiner, PairingError> {
         let mode_byte = match &self.kind {
             Kind::Invitation { inviter, .. } => {
@@ -369,7 +369,7 @@ impl Pairing {
                 if !(channel.verified && channel.remote.is_some()) && !self.allow_unverified {
                     return Err(PairingError::Unverified);
                 }
-                if label.len() > 255 || label.chars().any(char::is_control) {
+                if label.len() > 255 || !plain(label) {
                     return Err(PairingError::Local(Error::InvalidOptions));
                 }
                 MODE_DEVICE
@@ -515,6 +515,9 @@ impl PairingJoiner {
                 let key = reader.key()?;
                 let code = String::from_utf8(reader.short()?.to_vec())
                     .map_err(|_| PairingError::Protocol)?;
+                if code.is_empty() || !plain(&code) {
+                    return Err(PairingError::Protocol);
+                }
                 let expires = from_unix_seconds(reader.long()?);
                 reader.end()?;
                 self.responder_key(key)?;
@@ -921,6 +924,9 @@ impl PairingResponder {
             MODE_DEVICE => {
                 let label = String::from_utf8(reader.short()?.to_vec())
                     .map_err(|_| PairingError::Protocol)?;
+                if !plain(&label) {
+                    return Err(PairingError::Protocol);
+                }
                 reader.end()?;
                 let (code, expires) =
                     self.desk
@@ -990,6 +996,17 @@ impl Rotation {
         reader.end()?;
         Ok(key)
     }
+}
+
+/// Whether `text` is safe to show as it is: no control characters (line breaks included) and
+/// no bidirectional formatting characters, which can make a label or code read as another.
+fn plain(text: &str) -> bool {
+    !text.chars().any(|c| {
+        c.is_control()
+            || matches!(c, '\u{200E}' | '\u{200F}' | '\u{061C}')
+            || ('\u{202A}'..='\u{202E}').contains(&c)
+            || ('\u{2066}'..='\u{2069}').contains(&c)
+    })
 }
 
 fn refused(refusal: PairRefusal) -> Vec<u8> {

@@ -287,14 +287,16 @@ pub struct Rotation;  // announce(&KeyMaterial) -> Vec<u8>; parse(&[u8]) -> Resu
 - *Device flow.* The joiner sends a `label`; the responder issues a `UserCode`, which the
   joiner returns in `shown()` and keeps the connection open. The operator enters it; the app
   calls `find_device(approver, code)`, gets the joiner's `PeerId`, source and label (the app may
-  show them before deciding; the label proves nothing), then `approve` or `deny`. The joiner
+  show them before deciding; the label proves nothing), then `approve` or `deny`. A label or
+  code with a control or bidirectional formatting character is refused when sent and when
+  received (`Protocol`), so what an app shows reads as what was sent. The joiner
   learns `Paired`, `Denied` or `Expired`. `join` refuses (`Unverified`) unless
   `channel.verified` (and `remote` is set), or `allow_unverified(true)`. `verified` means the
   channel checked that `remote` is the peer the joiner meant (a pin, or roots for the name
   dialled); a proven key alone, as `Trust::AnyWithKeyProof` gives, is not that. coqui-peer-tls
-  sets it from the joiner's trust. **Allowing an unverified responder lets a relaying attacker pair in
-  place of both sides**: the operator approves the attacker's code and the joiner trusts the
-  attacker. Use PIN mode when the responder cannot be verified.
+  sets it from the joiner's trust. **Allowing an unverified responder lets a relaying attacker
+  pair in place of both sides**: the operator approves the attacker's code and the joiner trusts
+  the attacker. Use PIN mode when the responder cannot be verified.
 
 On success the responder has `accept_key`ed the joiner; the joiner's caller stores
 `Paired::peer`.
