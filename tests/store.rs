@@ -147,3 +147,97 @@ fn oversized_or_malformed_keys_are_not_recorded() {
     assert!(store.waiting().unwrap().is_empty());
     assert!(matches!(store.accept_key(&huge), Err(Error::Material)));
 }
+
+/// The waiting entries after one peer is recorded from each of `sources`, two per source at most.
+fn record_from_each(sources: &[&str]) -> Vec<coqui_peer::WaitingEntry> {
+    let (_directory, store) = store();
+    let store = store.with_limits(WaitingLimits {
+        per_source: 2,
+        total: 100,
+        rerecord: Duration::from_secs(60),
+    });
+    for (seed, source) in (0u8..).zip(sources) {
+        record(&store, &key("example", seed), source);
+    }
+    store.waiting().unwrap()
+}
+
+#[test]
+fn ipv6_sources_in_one_64_share_a_cap() {
+    let waiting = record_from_each(&[
+        "[2001:db8:1:2::1]:1000",
+        "[2001:db8:1:2::2]:1000",
+        "[2001:db8:1:2:ffff::3]:1000",
+        "[2001:db8:1:3::1]:1000",
+    ]);
+    assert_eq!(waiting.len(), 3);
+    let in_first = waiting
+        .iter()
+        .filter(|entry| {
+            entry
+                .source
+                .is_some_and(|s| s.ip().to_string().starts_with("2001:db8:1:2:"))
+        })
+        .count();
+    assert_eq!(in_first, 2);
+    // The full address is kept with each entry.
+    assert!(
+        waiting
+            .iter()
+            .any(|entry| entry.source == Some("[2001:db8:1:3::1]:1000".parse().unwrap()))
+    );
+}
+
+#[test]
+fn ipv4_sources_keep_a_cap_each() {
+    let waiting = record_from_each(&[
+        "192.0.2.1:1000",
+        "192.0.2.2:1000",
+        "192.0.2.3:1000",
+        "192.0.2.4:1000",
+    ]);
+    assert_eq!(waiting.len(), 4);
+}
+
+#[test]
+fn ipv4_mapped_ipv6_sources_count_as_ipv4() {
+    let waiting = record_from_each(&[
+        "[::ffff:192.0.2.1]:1000",
+        "[::ffff:192.0.2.2]:1000",
+        "[::ffff:192.0.2.3]:1000",
+        "192.0.2.1:2000",
+        "192.0.2.1:2001",
+    ]);
+    // Three mapped addresses are three IPv4 sources; the fourth and fifth entries share
+    // 192.0.2.1 with the first, so that source keeps its newest two.
+    assert_eq!(waiting.len(), 4);
+}
+
+#[test]
+fn the_ipv6_prefix_is_configurable() {
+    let (_directory, store) = store();
+    let store = store
+        .with_limits(WaitingLimits {
+            per_source: 1,
+            total: 100,
+            rerecord: Duration::from_secs(60),
+        })
+        .with_ipv6_prefix(48);
+    for (seed, source) in (0u8..).zip(["[2001:db8:1:2::1]:1000", "[2001:db8:1:3::1]:1000"]) {
+        record(&store, &key("example", seed), source);
+    }
+    assert_eq!(store.waiting().unwrap().len(), 1);
+
+    let (_directory, store) = self::store();
+    let store = store
+        .with_limits(WaitingLimits {
+            per_source: 1,
+            total: 100,
+            rerecord: Duration::from_secs(60),
+        })
+        .with_ipv6_prefix(128);
+    for (seed, source) in (0u8..).zip(["[2001:db8:1:2::1]:1000", "[2001:db8:1:2::2]:1000"]) {
+        record(&store, &key("example", seed), source);
+    }
+    assert_eq!(store.waiting().unwrap().len(), 2);
+}

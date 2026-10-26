@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -17,10 +17,15 @@ pub const FORMAT_VERSION: u32 = 3;
 /// certificates.
 const LEGACY_METHOD: &str = "tls";
 
+/// The IPv6 prefix length a waiting source is grouped by, unless the store is given another:
+/// one /64 is the usual end-site subnet, and its holder can use any address in it.
+const DEFAULT_IPV6_PREFIX: u8 = 64;
+
 /// Bounds on the waiting queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitingLimits {
-    /// Entries one source address may hold; the oldest of its own is replaced.
+    /// Entries one source may hold; the oldest of its own is replaced. A source is an IPv4
+    /// address, or an IPv6 prefix ([`TrustStore::with_ipv6_prefix`], /64 by default).
     pub per_source: usize,
     /// Entries the whole directory may hold; past it nothing is recorded.
     pub total: usize,
@@ -97,9 +102,10 @@ pub struct TrustStore {
     root: PathBuf,
     seen: Arc<Mutex<Seen>>,
     limits: WaitingLimits,
+    ipv6_prefix: u8,
 }
 
-/// Waiting entries recorded by this process, per source address, oldest first.
+/// Waiting entries recorded by this process, per source ([`source_key`]), oldest first.
 #[derive(Debug, Default)]
 struct Seen {
     sources: HashMap<Option<IpAddr>, VecDeque<(PeerId, Instant)>>,
@@ -125,6 +131,7 @@ impl TrustStore {
             root,
             seen: Arc::default(),
             limits: WaitingLimits::default(),
+            ipv6_prefix: DEFAULT_IPV6_PREFIX,
         })
     }
 
@@ -133,6 +140,16 @@ impl TrustStore {
     #[must_use]
     pub fn with_limits(mut self, limits: WaitingLimits) -> Self {
         self.limits = limits;
+        self
+    }
+
+    /// This store with IPv6 sources grouped by their first `bits` bits for the per-source
+    /// limits (64 unless set). 128 counts each address alone, which lets the holder of a
+    /// subnet fill the queue; values above 128 are 128. IPv4 sources, IPv4-mapped IPv6 ones
+    /// included, always count per address.
+    #[must_use]
+    pub fn with_ipv6_prefix(mut self, bits: u8) -> Self {
+        self.ipv6_prefix = bits.min(128);
         self
     }
 
@@ -239,12 +256,14 @@ impl TrustStore {
     /// **Call this only after the peer proved it holds the key** (see the
     /// [pairing contract](TrustStore#pairing)).
     ///
-    /// Bounded: invalid keys are ignored; one source IP address holds at most
+    /// Bounded: invalid keys are ignored; one source holds at most
     /// [`per_source`](WaitingLimits::per_source) entries (its oldest is replaced); the same
-    /// peer from the same IP address is recorded at most once per
+    /// peer from the same source is recorded at most once per
     /// [`rerecord`](WaitingLimits::rerecord); the directory holds at most
-    /// [`total`](WaitingLimits::total). The full `source` address is stored with the entry.
-    /// `None` is the source of callers that do not know it, which share one bucket.
+    /// [`total`](WaitingLimits::total). A source is an IPv4 address (IPv4-mapped IPv6 included)
+    /// or an IPv6 prefix of [`with_ipv6_prefix`](TrustStore::with_ipv6_prefix) bits, /64 by
+    /// default. The full `source` address is stored with the entry. `None` is the source of
+    /// callers that do not know it, which share one bucket.
     pub fn record_waiting(&self, key: &KeyMaterial, source: Option<SocketAddr>) {
         if key.check().is_err() {
             return;
@@ -260,7 +279,8 @@ impl TrustStore {
             return;
         }
         let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-        let held = seen.sources.entry(source.map(|s| s.ip())).or_default();
+        let bucket = source.map(|s| source_key(s.ip(), self.ipv6_prefix));
+        let held = seen.sources.entry(bucket).or_default();
         let now = Instant::now();
         if held
             .iter()
@@ -335,6 +355,21 @@ impl TrustStore {
             .join(section)
             .join(format!("{}.pem", id.to_base32_grouped()));
         legacy.is_file().then_some(legacy)
+    }
+}
+
+/// The source an address counts against: IPv4 as it is, IPv4-mapped IPv6 as the IPv4 address,
+/// other IPv6 cut to its first `prefix` bits.
+fn source_key(address: IpAddr, prefix: u8) -> IpAddr {
+    match address {
+        IpAddr::V4(_) => address,
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => {
+                let mask = u128::MAX.checked_shl(128 - u32::from(prefix)).unwrap_or(0);
+                IpAddr::V6(Ipv6Addr::from(u128::from(v6) & mask))
+            }
+        },
     }
 }
 
