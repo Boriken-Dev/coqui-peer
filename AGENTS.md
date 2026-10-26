@@ -288,6 +288,20 @@ pub struct Rotation;  // announce(&KeyMaterial) -> Vec<u8>; parse(&[u8]) -> Resu
 On success the responder has `accept_key`ed the joiner; the joiner's caller stores
 `Paired::peer`.
 
+**Security model** (what an attacker on the network can and cannot do, with default options):
+
+| Mode | Cannot | Can |
+| --- | --- | --- |
+| Invitation | learn the secret (sent only over a channel that proved the inviter) | pair, if it holds the secret before it expires or runs out of uses |
+| PIN | learn the PIN by watching or relaying; swap a key or relay between two bound channels without failing the confirmation | guess once per run: success `pin_attempts / combinations` per shown PIN (1 in 10^6), and the PIN is burned |
+| Device flow (verified responder) | see the user code; approve itself | guess codes at the approver's entry, up to the wrong-entry throttles per window |
+| Device flow (`allow_unverified`) | — | relay between joiner and responder and pair in place of both |
+| All | exceed `pending` exchanges or `pin_runs_per_source` per window | hold up to `pending` exchanges open until their TTL |
+
+A channel without `remote` proves no key: the PIN confirmation still binds both keys, but
+neither side proved it holds its private key. Without a binding, a relay between two channels
+is caught only through the keys it cannot replace.
+
 **Channels.** `remote: Some` means the channel proved the other side holds that key (a TLS
 handshake does); every key the exchange carries must then equal it (`Protocol` otherwise).
 `None` takes the key from the exchange: the PIN confirmation still covers both keys, so a
