@@ -172,6 +172,10 @@ pub struct Channel {
     /// The other side's key when the channel proved the other side holds it (a TLS handshake
     /// does); `None` over a channel that proves nothing, where the key comes from the exchange.
     pub remote: Option<KeyMaterial>,
+    /// Whether the channel also verified that `remote` is the peer this side meant to reach: a
+    /// pin of it, or roots for the name dialled. Proving a key is not that: any certificate
+    /// whose key is proven passes `Trust::AnyWithKeyProof`. The device flow's joiner needs it.
+    pub verified: bool,
     /// Bytes both ends of this channel and nobody else share (a TLS exporter), bound into the
     /// PIN confirmation so a relay between two channels fails it; `None` without one.
     pub binding: Option<Vec<u8>>,
@@ -281,7 +285,7 @@ impl Pairing {
     /// operator if the responder's app chooses; it proves nothing.
     ///
     /// The joiner must have verified the responder (a pin, or roots for the name dialled):
-    /// [`join`](Pairing::join) refuses a channel that did not prove the responder's key unless
+    /// [`join`](Pairing::join) refuses a channel that is not [`Channel::verified`] unless
     /// [`allow_unverified`](Pairing::allow_unverified) is set.
     pub fn device(label: &str) -> Self {
         Self::of(Kind::Device {
@@ -344,7 +348,8 @@ impl Pairing {
     /// # Errors
     ///
     /// [`PairingError::Unverified`] for an invitation whose channel did not prove the
-    /// inviter's key, and for the device flow over a channel that proved no key unless allowed;
+    /// inviter's key, and for the device flow over a channel that did not verify the responder
+    /// unless allowed;
     /// [`PairingError::Local`] with [`Error::InvalidOptions`] for a device label longer than
     /// 255 bytes or with a control character.
     pub fn join(self, channel: Channel) -> Result<PairingJoiner, PairingError> {
@@ -361,7 +366,7 @@ impl Pairing {
                 PinRole::Shown => MODE_PIN_SHOWN,
             },
             Kind::Device { label } => {
-                if channel.remote.is_none() && !self.allow_unverified {
+                if !(channel.verified && channel.remote.is_some()) && !self.allow_unverified {
                     return Err(PairingError::Unverified);
                 }
                 if label.len() > 255 || label.chars().any(char::is_control) {

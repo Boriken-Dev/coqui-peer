@@ -41,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   keeps their remaining uses from being restored.
 - `TrustStore::prove_successor` records that a successor's holder proved it (`Proven:`);
   `promote_successor` requires that unless `RotationOptions::allow_unproven`.
+- `pair::Channel::verified`: the device flow's joiner needs a channel that verified the
+  responder (a pin, or roots), not only one that proved its key.
 - `Error::SuccessorTaken`: an accepted key cannot announce the pending successor of another.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).

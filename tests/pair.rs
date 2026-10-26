@@ -70,11 +70,12 @@ fn fresh() -> Responder {
     }
 }
 
-/// A channel that proved both keys, with `binding`.
+/// A channel that proved both keys and verified the other side (a pin), with `binding`.
 fn proven(local: &KeyMaterial, remote: &KeyMaterial, binding: &[u8]) -> Channel {
     Channel {
         local: local.clone(),
         remote: Some(remote.clone()),
+        verified: true,
         binding: Some(binding.to_vec()),
     }
 }
@@ -84,6 +85,7 @@ fn plain(local: &KeyMaterial) -> Channel {
     Channel {
         local: local.clone(),
         remote: None,
+        verified: false,
         binding: None,
     }
 }
@@ -895,4 +897,23 @@ fn a_tiny_user_code_alphabet_runs_out_instead_of_spinning() {
         third.receive(&joiner.transmit().unwrap()),
         Err(PairingError::Refused(PairRefusal::Throttled))
     ));
+}
+
+#[test]
+fn a_proven_key_alone_does_not_verify_the_responder_for_the_device_flow() {
+    // What `Trust::AnyWithKeyProof` gives: the key is proven, not that it is the one meant.
+    let channel = Channel {
+        verified: false,
+        ..proven(&key(1), &key(2), b"bound")
+    };
+    assert!(matches!(
+        Pairing::device("").join(channel.clone()),
+        Err(PairingError::Unverified)
+    ));
+    assert!(
+        Pairing::device("")
+            .allow_unverified(true)
+            .join(channel)
+            .is_ok()
+    );
 }

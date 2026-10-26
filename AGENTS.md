@@ -203,7 +203,8 @@ message starts with the version byte 1 and a tag. The crate shows nothing and as
 what a person sees or decides is returned as data, and the caller acts.
 
 ```rust
-pub struct Channel { pub local: KeyMaterial, pub remote: Option<KeyMaterial>, pub binding: Option<Vec<u8>> }
+pub struct Channel { pub local: KeyMaterial, pub remote: Option<KeyMaterial>, pub verified: bool,
+                     pub binding: Option<Vec<u8>> }
 pub struct Pairing;            // Clone; Debug hides secrets
 impl Pairing {
     pub fn invitation(inviter: PeerId, secret: [u8; 32]) -> Pairing;
@@ -285,9 +286,11 @@ pub struct Rotation;  // announce(&KeyMaterial) -> Vec<u8>; parse(&[u8]) -> Resu
   joiner returns in `shown()` and keeps the connection open. The operator enters it; the app
   calls `find_device(approver, code)`, gets the joiner's `PeerId`, source and label (the app may
   show them before deciding; the label proves nothing), then `approve` or `deny`. The joiner
-  learns `Paired`, `Denied` or `Expired`. `join` refuses (`Unverified`) when `channel.remote`
-  is `None`, unless `allow_unverified(true)`; at the TLS layer, unless the joiner verified the
-  server by a pin or roots. **Allowing an unverified responder lets a relaying attacker pair in
+  learns `Paired`, `Denied` or `Expired`. `join` refuses (`Unverified`) unless
+  `channel.verified` (and `remote` is set), or `allow_unverified(true)`. `verified` means the
+  channel checked that `remote` is the peer the joiner meant (a pin, or roots for the name
+  dialled); a proven key alone, as `Trust::AnyWithKeyProof` gives, is not that. coqui-peer-tls
+  sets it from the joiner's trust. **Allowing an unverified responder lets a relaying attacker pair in
   place of both sides**: the operator approves the attacker's code and the joiner trusts the
   attacker. Use PIN mode when the responder cannot be verified.
 
@@ -308,8 +311,9 @@ A channel without `remote` proves no key: the PIN confirmation still binds both 
 neither side proved it holds its private key. Without a binding, a relay between two channels
 is caught only through the keys it cannot replace.
 
-**Channels.** `remote: Some` means the channel proved the other side holds that key (a TLS
-handshake does); every key the exchange carries must then equal it (`Protocol` otherwise).
+**Channels.** `verified` is the caller's statement that `remote` is the peer it meant (see the
+device flow); only the device flow reads it. `remote: Some` means the channel proved the other
+side holds that key (a TLS handshake does); every key the exchange carries must then equal it (`Protocol` otherwise).
 `None` takes the key from the exchange: the PIN confirmation still covers both keys, so a
 man in the middle cannot swap them without the PIN, but nothing proves either side holds its
 private key. `binding: Some` (coqui-peer-tls passes the RFC 8446 / RFC 5705 exporter, label
