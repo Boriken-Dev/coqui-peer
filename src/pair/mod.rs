@@ -383,7 +383,8 @@ impl Pairing {
                 PinRole::Shown => MODE_PIN_SHOWN,
             },
             Kind::Device { label } => {
-                if !(channel.verified && channel.remote.is_some()) && !self.allow_unverified {
+                let verified = channel.verified && channel.remote.is_some();
+                if !verified && !self.allow_unverified {
                     return Err(PairingError::Unverified);
                 }
                 if label.len() > 255 || !plain(label) {
