@@ -74,7 +74,7 @@ impl TrustStore {
     pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial>;   // None once retired
     pub fn waiting_key(&self, id: &PeerId) -> Option<KeyMaterial>;
     pub fn accept(&self, id: &PeerId) -> Result<(), Error>;             // waiting -> accepted
-    pub fn accept_key(&self, key: &KeyMaterial) -> Result<PeerId, Error>;
+    pub fn accept_key(&self, key: &KeyMaterial) -> Result<PeerId, Error>;   // a retired key: current again
     pub fn remove(&self, id: &PeerId) -> Result<bool, Error>;         // also its pending successor
     pub fn is_accepted(&self, id: &PeerId) -> bool;                   // false from Retires on
     pub fn record_waiting(&self, key: &KeyMaterial, source: Option<SocketAddr>);

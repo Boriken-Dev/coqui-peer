@@ -558,3 +558,24 @@ fn an_accepted_key_cannot_claim_another_keys_successor() {
     assert!(!store.is_accepted(&rotating.id()));
     assert!(store.is_accepted(&other.id()));
 }
+
+#[test]
+fn a_retired_key_that_pairs_again_is_accepted_again() {
+    let (_directory, store) = store();
+    let hand = Hand::at(T0);
+    let store = store.with_clock(hand.clock());
+    let (old, new) = (key("example", 1), key("example", 2));
+    store.accept_key(&old).unwrap();
+    store.announce_successor(&old.id(), &new).unwrap();
+    store.promote_successor(&new.id()).unwrap();
+    hand.advance(24 * 3600);
+    assert!(!store.is_accepted(&old.id()));
+    // Accepting it again (a new pairing) makes it current, not a silent no-op.
+    store.accept_key(&old).unwrap();
+    assert!(store.is_accepted(&old.id()));
+    assert!(store.retiring().unwrap().is_empty());
+    assert!(matches!(
+        store.accept_key(&old),
+        Err(Error::AlreadyAccepted)
+    ));
+}

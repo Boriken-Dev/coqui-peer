@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   slots, user codes, approvals and throttles; `PairingOptions` and `DeskLimits` with defaults
   and `weakened()`; `CodeAlphabet`, `Pin`, `UserCode`; the `Rotation` announcement message.
   Message vectors in `tests/vectors/pair/`.
+- Accepting a key past its retirement time (`accept`, `accept_key`, and so a new pairing)
+  makes it current again.
 - `Error::SuccessorTaken`: an accepted key cannot announce the pending successor of another.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).

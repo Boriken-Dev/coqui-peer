@@ -448,7 +448,7 @@ impl TrustStore {
         if entry.key.id() != *id {
             return Err(Error::Material);
         }
-        self.write_accepted(&entry.key)?;
+        self.write_current(&entry.key)?;
         let _ = fs::remove_file(path);
         Ok(())
     }
@@ -458,12 +458,12 @@ impl TrustStore {
     /// # Errors
     ///
     /// [`Error::Material`] when the key is not valid, [`Error::AlreadyAccepted`] when it is
-    /// accepted already (a retired key included: remove it first), [`Error::Io`] on write
-    /// failure.
+    /// accepted and current, [`Error::Io`] on write failure. A key past its retirement time is
+    /// accepted again, its file rewritten without `Successor:` and `Retires:`.
     pub fn accept_key(&self, key: &KeyMaterial) -> Result<PeerId, Error> {
         key.check()?;
         let id = key.id();
-        self.write_accepted(key)?;
+        self.write_current(key)?;
         let _ = fs::remove_file(self.path("waiting", &id));
         Ok(id)
     }
@@ -851,6 +851,17 @@ impl TrustStore {
             events.pop_front();
         }
         events.push_back(event);
+    }
+
+    /// Writes `key` as accepted and current: new, or over a retired file.
+    fn write_current(&self, key: &KeyMaterial) -> Result<(), Error> {
+        if self.is_accepted(&key.id()) {
+            return Err(Error::AlreadyAccepted);
+        }
+        match self.existing("accepted", &key.id()) {
+            Some(path) => replace(&path, &accepted_text(key, None, None)).map_err(Error::Io),
+            None => self.write_accepted(key),
+        }
     }
 
     fn write_accepted(&self, key: &KeyMaterial) -> Result<(), Error> {
