@@ -173,6 +173,12 @@ impl Invitation {
     }
 }
 
+impl Drop for Invitation {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.secret);
+    }
+}
+
 impl fmt::Debug for Invitation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter

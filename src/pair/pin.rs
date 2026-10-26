@@ -33,6 +33,13 @@ pub(crate) struct Keys {
     pub(crate) responder: [u8; 32],
 }
 
+impl Drop for Keys {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.joiner);
+        zeroize::Zeroize::zeroize(&mut self.responder);
+    }
+}
+
 /// Serves `rand_core` from a [`Random`], remembering a failure instead of hiding it.
 struct Draw<'a> {
     random: &'a Random,
@@ -102,7 +109,7 @@ pub(crate) fn start(
 /// Finishes SPAKE2 with the other side's message and derives the confirmation keys; `None`
 /// when the message is malformed.
 pub(crate) fn finish(pake: Pake, other: &[u8]) -> Option<Keys> {
-    let shared = pake.0.finish(other).ok()?;
+    let shared = zeroize::Zeroizing::new(pake.0.finish(other).ok()?);
     let hkdf = Hkdf::<Sha256>::new(None, &shared);
     let mut keys = Keys {
         joiner: [0; 32],

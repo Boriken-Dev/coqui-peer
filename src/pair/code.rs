@@ -146,6 +146,12 @@ impl Pin {
     }
 }
 
+impl Drop for Pin {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.0);
+    }
+}
+
 impl fmt::Debug for Pin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("Pin(..)")

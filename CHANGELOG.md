@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   source in every mode.
 - A device-flow label or user code with a control or bidirectional formatting character is
   refused on receipt as well as when sent.
+- Invitation secrets, PINs and the PIN exchange's keys are zeroed when dropped (`zeroize`), and
+  a `pair::Channel`'s `Debug` hides its binding.
 - `Error::SuccessorTaken`: an accepted key cannot announce the pending successor of another.
 - `Clock` (an injectable wall clock, `TrustStore::with_clock`) and `Random` (a caller-supplied
   secure random source; `Random::os` with the `pin` feature).

@@ -1156,3 +1156,22 @@ fn a_decided_slot_is_listed_and_taken_no_more() {
     assert!(world.desk.submit_code(&code).is_err());
     responder.resume(decision).unwrap();
 }
+
+#[test]
+fn debug_output_shows_no_binding_secret_or_pin() {
+    let channel = Channel {
+        binding: Some(vec![171; 32]),
+        ..proven(&key(1), &key(2), b"")
+    };
+    let shown = format!("{channel:?}");
+    assert!(!shown.contains("171"), "{shown}");
+    assert!(shown.contains("verified: true"));
+    let pairing = Pairing::invitation(key(2).id(), [171; 32]);
+    assert!(!format!("{pairing:?}").contains("171"));
+    let world = fresh();
+    let invitation = world
+        .store
+        .invite(&counting(171), InvitationOptions::default(), "")
+        .unwrap();
+    assert!(!format!("{invitation:?}").contains("171"));
+}

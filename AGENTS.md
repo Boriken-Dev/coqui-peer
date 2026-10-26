@@ -11,9 +11,11 @@ package and is self-contained. Development documentation lives with the source a
 | `tokio` | `tokio` (`io-util`): module `asynch` | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`): PIN pairing, `Random::os` | off |
 
-MSRV Rust 1.89. A default build depends on `sha1`, `sha2`, `subtle` and `data-encoding`. No
-`unsafe` code. No TLS, no crypto transport, no process-global state; nothing reads a file or
-an environment variable unless the caller passes a directory. Everything is built in code;
+MSRV Rust 1.89. A default build depends on `sha1`, `sha2`, `subtle`, `zeroize` and
+`data-encoding`. No `unsafe` code. Invitation secrets, PINs and the PIN exchange's keys are
+zeroed when dropped (`zeroize`); a `Channel`'s `Debug` hides its binding. No TLS, no crypto
+transport, no process-global state; nothing reads a file or an environment variable unless the
+caller passes a directory. Everything is built in code;
 `serde` is the only way text formats come in, and the consumer picks the format.
 
 ## PeerId, Digest

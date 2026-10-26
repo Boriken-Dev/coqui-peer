@@ -30,6 +30,8 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::time::SystemTime;
 
+use zeroize::Zeroizing;
+
 pub use code::{CodeAlphabet, PairingCode, Pin, UserCode};
 pub use desk::{
     Decided, Decision, DeskLimits, PairingDesk, PairingOptions, PendingDevice, PendingSlot,
@@ -164,8 +166,8 @@ impl From<Error> for PairingError {
     }
 }
 
-/// What the channel the exchange runs over gives it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What the channel the exchange runs over gives it. `Debug` does not show the binding.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Channel {
     /// This side's key, which the other side will accept.
     pub local: KeyMaterial,
@@ -179,6 +181,18 @@ pub struct Channel {
     /// Bytes both ends of this channel and nobody else share (a TLS exporter), bound into the
     /// PIN confirmation so a relay between two channels fails it; `None` without one.
     pub binding: Option<Vec<u8>>,
+}
+
+impl fmt::Debug for Channel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Channel")
+            .field("local", &self.local.id())
+            .field("remote", &self.remote.as_ref().map(KeyMaterial::id))
+            .field("verified", &self.verified)
+            .field("binding", &self.binding.as_ref().map(|_| ".."))
+            .finish()
+    }
 }
 
 /// The pairing mode.
@@ -232,7 +246,7 @@ pub struct Paired {
 enum Kind {
     Invitation {
         inviter: PeerId,
-        secret: [u8; 32],
+        secret: Zeroizing<[u8; 32]>,
     },
     #[cfg(feature = "pin")]
     Pin {
@@ -268,7 +282,10 @@ impl Pairing {
     /// the secret only when the channel proved `inviter`'s key, so it must be confidential and
     /// authenticate the inviter (a TLS connection that pins it).
     pub fn invitation(inviter: PeerId, secret: [u8; 32]) -> Self {
-        Self::of(Kind::Invitation { inviter, secret })
+        Self::of(Kind::Invitation {
+            inviter,
+            secret: Zeroizing::new(secret),
+        })
     }
 
     /// Pairs with a PIN: the one the responder shows and a person typed here
@@ -379,7 +396,7 @@ impl Pairing {
         hello.byte(mode_byte);
         hello.key(&channel.local);
         match &self.kind {
-            Kind::Invitation { secret, .. } => hello.raw(secret),
+            Kind::Invitation { secret, .. } => hello.raw(&secret[..]),
             #[cfg(feature = "pin")]
             Kind::Pin { .. } => {}
             Kind::Device { label } => hello.short(label.as_bytes()),
@@ -610,7 +627,7 @@ enum Responding {
     },
     #[cfg(feature = "pin")]
     AwaitConfirm {
-        key: [u8; 32],
+        key: Zeroizing<[u8; 32]>,
         record: Vec<u8>,
     },
     AwaitDecision,
@@ -830,7 +847,7 @@ impl PairingResponder {
         out.raw(&mac);
         self.out.push_back(out.finish());
         self.state = Responding::AwaitConfirm {
-            key: keys.joiner,
+            key: Zeroizing::new(keys.joiner),
             record,
         };
         Ok(())
@@ -908,10 +925,12 @@ impl PairingResponder {
         self.deadline = ttl.map(|ttl| later(self.desk.now(), ttl));
         match mode {
             MODE_INVITATION => {
-                let secret: [u8; 32] = reader
-                    .take(32)?
-                    .try_into()
-                    .map_err(|_| PairingError::Protocol)?;
+                let secret: Zeroizing<[u8; 32]> = Zeroizing::new(
+                    reader
+                        .take(32)?
+                        .try_into()
+                        .map_err(|_| PairingError::Protocol)?,
+                );
                 reader.end()?;
                 self.admission = Some(admission);
                 match self.store.redeem(&secret) {
