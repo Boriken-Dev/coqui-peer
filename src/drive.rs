@@ -10,6 +10,89 @@ pub const MAX_MESSAGE: usize = 1 << 20;
 
 const CHUNK: usize = 16 * 1024;
 
+/// The marker inside the `io::Error` a frame function returns for a frame longer than
+/// [`MAX_MESSAGE`], so the drivers can report it as [`DriveError::TooLong`].
+#[derive(Debug)]
+pub(crate) struct FrameTooLong;
+
+impl fmt::Display for FrameTooLong {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("frame is longer than MAX_MESSAGE")
+    }
+}
+
+impl core::error::Error for FrameTooLong {}
+
+/// The four-byte big-endian length that opens a frame of `length` bytes.
+pub(crate) fn frame_header(length: usize, kind: io::ErrorKind) -> io::Result<[u8; 4]> {
+    match u32::try_from(length) {
+        Ok(header) if length <= MAX_MESSAGE => Ok(header.to_be_bytes()),
+        _ => Err(io::Error::new(kind, FrameTooLong)),
+    }
+}
+
+/// The length a frame header declares, refused above [`MAX_MESSAGE`].
+pub(crate) fn frame_length(header: [u8; 4]) -> io::Result<u64> {
+    let length = u32::from_be_bytes(header);
+    frame_header(
+        usize::try_from(length).unwrap_or(usize::MAX),
+        io::ErrorKind::InvalidData,
+    )?;
+    Ok(u64::from(length))
+}
+
+/// A short frame body: the stream ended inside it.
+pub(crate) fn check_whole(message: &[u8], length: u64) -> io::Result<()> {
+    if u64::try_from(message.len()).ok() == Some(length) {
+        Ok(())
+    } else {
+        Err(io::ErrorKind::UnexpectedEof.into())
+    }
+}
+
+/// The driver error for an `io::Error` from the transport or a frame function.
+pub(crate) fn transport_error<E>(error: io::Error) -> DriveError<E> {
+    if error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<FrameTooLong>())
+    {
+        DriveError::TooLong
+    } else {
+        DriveError::Io(error)
+    }
+}
+
+/// Writes `message` as one frame, its length first as four big-endian bytes, and flushes.
+///
+/// This is the framing [`drive_stream`] gives a [`Framing::Message`] handshake, for a method
+/// that sends other messages over the same stream (a pairing exchange, an announcement).
+///
+/// # Errors
+///
+/// `InvalidInput` when `message` is longer than [`MAX_MESSAGE`]; otherwise the stream's error.
+pub fn write_frame<W: Write + ?Sized>(io: &mut W, message: &[u8]) -> io::Result<()> {
+    io.write_all(&frame_header(message.len(), io::ErrorKind::InvalidInput)?)?;
+    io.write_all(message)?;
+    io.flush()
+}
+
+/// Reads one frame written by [`write_frame`]. The buffer grows as bytes arrive, so a declared
+/// length costs nothing until the peer sends it.
+///
+/// # Errors
+///
+/// `InvalidData` when the declared length is above [`MAX_MESSAGE`], `UnexpectedEof` when the
+/// stream ends inside the frame; otherwise the stream's error.
+pub fn read_frame<R: Read + ?Sized>(io: &mut R) -> io::Result<Vec<u8>> {
+    let mut header = [0u8; 4];
+    io.read_exact(&mut header)?;
+    let length = frame_length(header)?;
+    let mut message = Vec::new();
+    io.take(length).read_to_end(&mut message)?;
+    check_whole(&message, length)?;
+    Ok(message)
+}
+
 /// Why driving a handshake failed.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -105,14 +188,7 @@ where
             return Ok(handshake);
         }
         let received = if framed {
-            let mut length = [0u8; 4];
-            io.read_exact(&mut length).map_err(DriveError::Io)?;
-            let length = usize::try_from(u32::from_be_bytes(length)).unwrap_or(usize::MAX);
-            if length > MAX_MESSAGE {
-                return Err(DriveError::TooLong);
-            }
-            let mut message = vec![0u8; length];
-            io.read_exact(&mut message).map_err(DriveError::Io)?;
+            let message = read_frame(io).map_err(transport_error)?;
             handshake.receive(&message)
         } else {
             let read = io.read(&mut buffer).map_err(DriveError::Io)?;
@@ -137,11 +213,10 @@ where
 {
     while let Some(out) = handshake.transmit().map_err(DriveError::Handshake)? {
         if framed {
-            let length = u32::try_from(out.len()).map_err(|_| DriveError::TooLong)?;
-            io.write_all(&length.to_be_bytes())
-                .map_err(DriveError::Io)?;
+            write_frame(io, &out).map_err(transport_error)?;
+        } else {
+            io.write_all(&out).map_err(DriveError::Io)?;
         }
-        io.write_all(&out).map_err(DriveError::Io)?;
     }
     io.flush().map_err(DriveError::Io)
 }

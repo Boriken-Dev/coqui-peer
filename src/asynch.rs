@@ -6,7 +6,7 @@ use std::io;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
-use crate::drive::{DriveError, MAX_MESSAGE};
+use crate::drive::{DriveError, check_whole, frame_header, frame_length, transport_error};
 use crate::method::{Established, Framing, Handshake};
 
 const CHUNK: usize = 16 * 1024;
@@ -18,6 +18,38 @@ pub trait MessageTransport {
 
     /// Receives the next message.
     fn recv(&mut self) -> impl Future<Output = io::Result<Vec<u8>>> + Send;
+}
+
+/// [`write_frame`](crate::write_frame) over a tokio stream.
+///
+/// # Errors
+///
+/// `InvalidInput` when `message` is longer than [`MAX_MESSAGE`](crate::MAX_MESSAGE);
+/// otherwise the stream's error.
+pub async fn write_frame<W: AsyncWrite + Unpin + ?Sized>(
+    io: &mut W,
+    message: &[u8],
+) -> io::Result<()> {
+    io.write_all(&frame_header(message.len(), io::ErrorKind::InvalidInput)?)
+        .await?;
+    io.write_all(message).await?;
+    io.flush().await
+}
+
+/// [`read_frame`](crate::read_frame) over a tokio stream: the buffer grows as bytes arrive.
+///
+/// # Errors
+///
+/// `InvalidData` when the declared length is above [`MAX_MESSAGE`](crate::MAX_MESSAGE),
+/// `UnexpectedEof` when the stream ends inside the frame; otherwise the stream's error.
+pub async fn read_frame<R: AsyncRead + Unpin + ?Sized>(io: &mut R) -> io::Result<Vec<u8>> {
+    let mut header = [0u8; 4];
+    io.read_exact(&mut header).await?;
+    let length = frame_length(header)?;
+    let mut message = Vec::new();
+    io.take(length).read_to_end(&mut message).await?;
+    check_whole(&message, length)?;
+    Ok(message)
 }
 
 /// [`drive_stream`](crate::drive_stream) over a tokio stream.
@@ -58,14 +90,7 @@ where
             return Ok(handshake);
         }
         let received = if framed {
-            let mut length = [0u8; 4];
-            io.read_exact(&mut length).await.map_err(DriveError::Io)?;
-            let length = usize::try_from(u32::from_be_bytes(length)).unwrap_or(usize::MAX);
-            if length > MAX_MESSAGE {
-                return Err(DriveError::TooLong);
-            }
-            let mut message = vec![0u8; length];
-            io.read_exact(&mut message).await.map_err(DriveError::Io)?;
+            let message = read_frame(io).await.map_err(transport_error)?;
             handshake.receive(&message)
         } else {
             let read = io.read(&mut buffer).await.map_err(DriveError::Io)?;
@@ -94,12 +119,10 @@ where
 {
     while let Some(out) = handshake.transmit().map_err(DriveError::Handshake)? {
         if framed {
-            let length = u32::try_from(out.len()).map_err(|_| DriveError::TooLong)?;
-            io.write_all(&length.to_be_bytes())
-                .await
-                .map_err(DriveError::Io)?;
+            write_frame(io, &out).await.map_err(transport_error)?;
+        } else {
+            io.write_all(&out).await.map_err(DriveError::Io)?;
         }
-        io.write_all(&out).await.map_err(DriveError::Io)?;
     }
     io.flush().await.map_err(DriveError::Io)
 }

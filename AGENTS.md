@@ -177,9 +177,19 @@ pub fn complete_stream<H: Handshake, T: Read + Write>(H, &mut T) -> Result<H, Dr
 pub fn complete_messages<H: Handshake, T: MessageTransport>(H, &mut T) -> Result<H, DriveError<H::Error>>;
 pub enum DriveError<E> { Io(io::Error), Handshake(E), TooLong }
 pub const MAX_MESSAGE: usize = 1 << 20;
+pub fn write_frame<W: Write + ?Sized>(io: &mut W, message: &[u8]) -> io::Result<()>;   // length, message, flush
+pub fn read_frame<R: Read + ?Sized>(io: &mut R) -> io::Result<Vec<u8>>;
 // feature tokio, module asynch: MessageTransport (async fns), drive_stream, drive_messages,
-// complete_stream, complete_messages
+// complete_stream, complete_messages, write_frame, read_frame (AsyncWrite / AsyncRead + Unpin)
 ```
+
+**Frames.** One format for every length-prefixed message: four big-endian length bytes, then
+the message, at most `MAX_MESSAGE`. `write_frame` refuses a longer message with
+`InvalidInput` and writes nothing; `read_frame` refuses a longer declared length with
+`InvalidData` before reading it, and a stream that ends inside a frame with `UnexpectedEof`.
+The reader's buffer grows as bytes arrive, so a declared length costs nothing until it is
+sent. The drivers use them for `Framing::Message` over a stream and report a frame above the
+limit as `DriveError::TooLong`.
 
 The handshake does no I/O; the caller owns the transport. `Stream` handshakes treat input as
 bytes (chunks may split or join); `Message` handshakes get exactly one message per `receive`.
