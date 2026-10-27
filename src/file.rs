@@ -28,7 +28,7 @@ pub enum Access {
 /// is removed either way.
 pub fn write_new(path: &Path, contents: &[u8], access: Access) -> io::Result<()> {
     let temporary = written(path, contents, access)?;
-    let result = fs::hard_link(&temporary, path);
+    let result = retried(|| fs::hard_link(&temporary, path));
     let _ = fs::remove_file(&temporary);
     result
 }
@@ -42,11 +42,32 @@ pub fn write_new(path: &Path, contents: &[u8], access: Access) -> io::Result<()>
 /// The filesystem's error; the temporary file is removed then.
 pub fn replace(path: &Path, contents: &[u8], access: Access) -> io::Result<()> {
     let temporary = written(path, contents, access)?;
-    let result = fs::rename(&temporary, path);
+    let result = retried(|| fs::rename(&temporary, path));
     if result.is_err() {
         let _ = fs::remove_file(&temporary);
     }
     result
+}
+
+/// Runs `operation`, and on Windows runs it again while it fails with `PermissionDenied`, for
+/// up to about a second: a file another handle holds open without delete sharing (a scanner
+/// that opens a file just written, a concurrent rename of it) cannot be renamed, linked or
+/// removed meanwhile, and the call fails with `ERROR_ACCESS_DENIED`.
+pub(crate) fn retried(mut operation: impl FnMut() -> io::Result<()>) -> io::Result<()> {
+    let mut wait = core::time::Duration::from_millis(2);
+    loop {
+        match operation() {
+            Err(error)
+                if cfg!(windows)
+                    && error.kind() == io::ErrorKind::PermissionDenied
+                    && wait <= core::time::Duration::from_millis(512) =>
+            {
+                std::thread::sleep(wait);
+                wait *= 2;
+            }
+            result => return result,
+        }
+    }
 }
 
 /// A synced temporary file beside `path` holding `contents`.

@@ -633,7 +633,7 @@ impl TrustStore {
         // Removing the claimed file decides the claim. A rename is not enough: on Windows a
         // redeemer that opened the file before another moved it can still move it again, but a
         // file is removed only once.
-        if fs::remove_file(&claimed).is_err() {
+        if file::retried(|| fs::remove_file(&claimed)).is_err() {
             return Err(Error::NotInvited);
         }
         let (expires, uses, label) = text
@@ -726,7 +726,7 @@ impl TrustStore {
             .write(true)
             .open(self.revoked_path(id))
             .map_err(Error::Io)?;
-        match fs::remove_file(self.invitation_path(id)) {
+        match file::retried(|| fs::remove_file(self.invitation_path(id))) {
             Ok(()) => Ok(true),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(error) => Err(Error::Io(error)),
