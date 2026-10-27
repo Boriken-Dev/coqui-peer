@@ -16,6 +16,7 @@ use crate::pair::code::{CodeAlphabet, PairingCode, Pin, UserCode, below, same};
 use crate::pair::{PairRefusal, PairingError};
 use crate::random::Random;
 use crate::store::{DEFAULT_IPV6_PREFIX, source_key};
+use crate::weakening::Weakening;
 
 /// Draws of a user code that is not already pending before the desk gives up.
 const ISSUE_DRAWS: usize = 64;
@@ -101,23 +102,8 @@ impl Default for DeskLimits {
     }
 }
 
-/// A setting weaker than its default, as plain data for the caller to show or log.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Weakening {
-    /// The field's name.
-    pub setting: String,
-    /// Its value as text.
-    pub value: String,
-    /// The default as text.
-    pub default: String,
-}
-
-fn note(found: &mut Vec<Weakening>, setting: &str, value: String, default: String) {
-    found.push(Weakening {
-        setting: setting.to_owned(),
-        value,
-        default,
-    });
+fn note(found: &mut Vec<Weakening>, setting: &str, value: String, strict: String) {
+    found.push(Weakening::new(setting, value, strict));
 }
 
 impl PairingOptions {

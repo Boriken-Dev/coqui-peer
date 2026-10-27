@@ -310,7 +310,7 @@ pub struct DeskLimits { pub pending: usize, pub pending_per_source: usize, pub p
     pub ipv6_prefix: u8 }                       // Default: 32, 4, 8, 5, 60 s, 60, 64
 impl PairingOptions { pub fn check(&self) -> Result<(), Error>; pub fn weakened(&self) -> Vec<Weakening>; }
 impl DeskLimits { pub fn weakened(&self) -> Vec<Weakening>; }
-pub struct Weakening { pub setting: String, pub value: String, pub default: String }
+// Weakening is the crate root's: coqui_peer::Weakening { setting, value, strict }, Weakening::new(setting, value, strict)
 pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
 pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
 pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }

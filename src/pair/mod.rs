@@ -36,7 +36,7 @@ use zeroize::Zeroizing;
 pub use code::{CodeAlphabet, PairingCode, Pin, UserCode};
 pub use desk::{
     Decided, Decision, DeskLimits, PairingDesk, PairingOptions, PendingDevice, PendingSlot,
-    ShownPin, Ticket, Weakening,
+    ShownPin, Ticket,
 };
 
 use crate::clock::{from_unix_seconds, later, unix_seconds};

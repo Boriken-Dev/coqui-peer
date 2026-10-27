@@ -497,6 +497,15 @@ fn weaker_options_are_reported_not_refused() {
     assert_eq!(desk.options().pin_attempts, 3);
     let weakened: Vec<String> = options.weakened().into_iter().map(|w| w.setting).collect();
     assert_eq!(weakened, ["pin_alphabet", "pin_attempts"]);
+    // The one Weakening type of the crate root, with the strict value beside the current one.
+    let attempts = options
+        .weakened()
+        .into_iter()
+        .find(|w| w.setting == "pin_attempts");
+    assert_eq!(
+        attempts,
+        Some(coqui_peer::Weakening::new("pin_attempts", "3", "1"))
+    );
     let meaningless = PairingOptions {
         pin_attempts: 0,
         ..PairingOptions::default()

@@ -48,6 +48,7 @@ pub mod pair;
 pub mod pem;
 mod random;
 mod store;
+mod weakening;
 
 pub use clock::Clock;
 pub use drive::{
@@ -64,3 +65,4 @@ pub use store::{
     FORMAT_VERSION, Invitation, InvitationEntry, InvitationId, InvitationOptions, MAX_LABEL,
     Retiring, RotationEvent, RotationOptions, Successor, TrustStore, WaitingEntry, WaitingLimits,
 };
+pub use weakening::Weakening;
