@@ -123,6 +123,30 @@ holder controls every address of a /64; 128 counts each IPv6 address alone. The 
 is still stored with the entry. `None` sources share one bucket. `is_accepted` and the `*_key`
 readers check that the stored bytes hash to the id.
 
+**The queue without the store.** `WaitingQueue` is `record_waiting`'s bounding with no
+storage, for a host that keeps waiting entries elsewhere (a table, a database):
+
+```rust
+pub struct WaitingQueue;   // Clone, Debug
+impl WaitingQueue {
+    pub fn new(limits: WaitingLimits) -> WaitingQueue;          // IPv6 grouped by /64
+    pub fn with_ipv6_prefix(self, bits: u8) -> WaitingQueue;    // above 128 is 128
+    pub fn limits(&self) -> WaitingLimits;  pub fn ipv6_prefix(&self) -> u8;
+    pub fn admit(&mut self, id: PeerId, source: Option<SocketAddr>, stored: usize, now: Instant) -> Admission;
+    pub fn remember(&mut self, id: PeerId, source: Option<SocketAddr>, at: Instant) -> Vec<PeerId>;
+    pub fn forget(&mut self, id: &PeerId);
+}
+#[non_exhaustive] pub struct Admission { pub record: bool, pub evict: Vec<PeerId> }
+```
+
+`admit` decides one peer: with `stored` (the host's count of waiting entries) at `total` or
+above, `record` is false and nothing is evicted (the newcomer waits); the same id from the same
+source within `rerecord` is not recorded again; otherwise `record` is true and `evict` lists
+that source's oldest entries past `per_source`, which the host removes. The host skips `admit`
+for an id it already stores. `remember` seeds the queue from stored entries (placed by time;
+returns the ones past `per_source`), `forget` drops an id the host accepted or removed. Sources
+are bucketed as in the store. The queue keeps what it admitted in memory only.
+
 **Invitations.** `invite` draws a 32-byte secret from `random` and writes only its SHA-256
 (the `InvitationId`), its expiry, uses and label: the caller hands the secret to the joiner
 with the inviter's id, and the store cannot leak it. `redeem` claims the file by renaming it,

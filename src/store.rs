@@ -4,7 +4,6 @@ use core::fmt;
 use core::net::{IpAddr, Ipv6Addr, SocketAddr};
 use core::str::FromStr;
 use core::time::Duration;
-use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -21,6 +20,7 @@ use crate::id::PeerId;
 use crate::key::KeyMaterial;
 use crate::pem;
 use crate::random::Random;
+use crate::waiting::WaitingQueue;
 
 /// The version of the on-disk format [`TrustStore`] writes and reads.
 pub const FORMAT_VERSION: u32 = 1;
@@ -318,18 +318,10 @@ pub enum RotationEvent {
 #[derive(Debug, Clone)]
 pub struct TrustStore {
     root: PathBuf,
-    seen: Arc<Mutex<Seen>>,
+    waiting: Arc<Mutex<WaitingQueue>>,
     events: Arc<Mutex<VecDeque<RotationEvent>>>,
-    limits: WaitingLimits,
-    ipv6_prefix: u8,
     clock: Clock,
     rotation: RotationOptions,
-}
-
-/// Waiting entries recorded by this process, per source ([`source_key`]), oldest first.
-#[derive(Debug, Default)]
-struct Seen {
-    sources: HashMap<Option<IpAddr>, VecDeque<(PeerId, Instant)>>,
 }
 
 /// What a store file holds.
@@ -354,10 +346,8 @@ impl TrustStore {
         fs::create_dir_all(root.join("waiting")).map_err(Error::Io)?;
         Ok(Self {
             root,
-            seen: Arc::default(),
+            waiting: Arc::new(Mutex::new(WaitingQueue::new(WaitingLimits::default()))),
             events: Arc::default(),
-            limits: WaitingLimits::default(),
-            ipv6_prefix: DEFAULT_IPV6_PREFIX,
             clock: Clock::system(),
             rotation: RotationOptions::default(),
         })
@@ -367,7 +357,10 @@ impl TrustStore {
     /// all, 60 seconds).
     #[must_use]
     pub fn with_limits(mut self, limits: WaitingLimits) -> Self {
-        self.limits = limits;
+        let prefix = self.queue().ipv6_prefix();
+        self.waiting = Arc::new(Mutex::new(
+            WaitingQueue::new(limits).with_ipv6_prefix(prefix),
+        ));
         self
     }
 
@@ -377,8 +370,14 @@ impl TrustStore {
     /// included, always count per address.
     #[must_use]
     pub fn with_ipv6_prefix(mut self, bits: u8) -> Self {
-        self.ipv6_prefix = bits.min(128);
+        let limits = self.queue().limits();
+        self.waiting = Arc::new(Mutex::new(WaitingQueue::new(limits).with_ipv6_prefix(bits)));
         self
+    }
+
+    /// The waiting queue's bounds and what this process recorded.
+    fn queue(&self) -> std::sync::MutexGuard<'_, WaitingQueue> {
+        self.waiting.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// This store reading `clock` for invitation expiry and key retirement (the system clock
@@ -543,25 +542,15 @@ impl TrustStore {
         let Ok(entries) = fs::read_dir(self.root.join("waiting")) else {
             return;
         };
-        if entries.take(self.limits.total).count() >= self.limits.total {
+        let mut queue = self.queue();
+        let total = queue.limits().total;
+        let stored = entries.take(total).count();
+        let admission = queue.admit(id, source, stored, Instant::now());
+        if !admission.record {
             return;
         }
-        let mut seen = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
-        let bucket = source.map(|s| source_key(s.ip(), self.ipv6_prefix));
-        let held = seen.sources.entry(bucket).or_default();
-        let now = Instant::now();
-        if held
-            .iter()
-            .any(|(had, at)| *had == id && now.duration_since(*at) < self.limits.rerecord)
-        {
-            return;
-        }
-        held.retain(|(had, _)| *had != id);
-        held.push_back((id, now));
-        while held.len() > self.limits.per_source {
-            if let Some((old, _)) = held.pop_front() {
-                let _ = fs::remove_file(self.path("waiting", &old));
-            }
+        for old in &admission.evict {
+            let _ = fs::remove_file(self.path("waiting", old));
         }
         let mut text = source.map_or_else(String::new, |s| format!("Source: {s}\n"));
         text.push_str(&format!("Method: {}\n", key.method));

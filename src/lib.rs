@@ -48,6 +48,7 @@ pub mod pair;
 pub mod pem;
 mod random;
 mod store;
+mod waiting;
 mod weakening;
 
 pub use clock::Clock;
@@ -65,4 +66,5 @@ pub use store::{
     FORMAT_VERSION, Invitation, InvitationEntry, InvitationId, InvitationOptions, MAX_LABEL,
     Retiring, RotationEvent, RotationOptions, Successor, TrustStore, WaitingEntry, WaitingLimits,
 };
+pub use waiting::{Admission, WaitingQueue};
 pub use weakening::Weakening;
