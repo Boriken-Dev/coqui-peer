@@ -49,8 +49,9 @@ mod store;
 
 pub use clock::Clock;
 pub use drive::{
-    DriveError, MAX_MESSAGE, MessageTransport, complete_messages, complete_stream, drive_messages,
-    drive_stream, read_frame, write_frame,
+    DriveError, MAX_MESSAGE, MessageTransport, ReadTimeout, complete_messages,
+    complete_messages_until, complete_stream, complete_stream_until, drive_messages,
+    drive_messages_until, drive_stream, drive_stream_until, read_frame, write_frame,
 };
 pub use error::Error;
 pub use id::{Digest, PeerId};

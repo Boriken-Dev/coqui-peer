@@ -3,6 +3,7 @@
 
 use core::future::Future;
 use std::io;
+use std::time::Instant;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -125,6 +126,85 @@ where
         }
     }
     io.flush().await.map_err(DriveError::Io)
+}
+
+/// Runs `work` until `deadline`, a passed deadline being [`DriveError::TimedOut`].
+async fn until<T, E>(
+    deadline: Instant,
+    work: impl Future<Output = Result<T, DriveError<E>>>,
+) -> Result<T, DriveError<E>> {
+    tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work)
+        .await
+        .unwrap_or(Err(DriveError::TimedOut))
+}
+
+/// [`drive_stream`] that ends at `deadline`, through `tokio::time`: the runtime must have its
+/// timer enabled (tokio panics otherwise).
+///
+/// # Errors
+///
+/// [`DriveError::TimedOut`] when `deadline` passes first; otherwise as [`drive_stream`].
+pub async fn drive_stream_until<H, T>(
+    handshake: H,
+    io: &mut T,
+    deadline: Instant,
+) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    until(deadline, drive_stream(handshake, io)).await
+}
+
+/// [`complete_stream`] that ends at `deadline`, as [`drive_stream_until`] does.
+///
+/// # Errors
+///
+/// As [`drive_stream_until`].
+pub async fn complete_stream_until<H, T>(
+    handshake: H,
+    io: &mut T,
+    deadline: Instant,
+) -> Result<H, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: AsyncRead + AsyncWrite + Unpin,
+{
+    until(deadline, complete_stream(handshake, io)).await
+}
+
+/// [`drive_messages`] that ends at `deadline`, as [`drive_stream_until`] does.
+///
+/// # Errors
+///
+/// [`DriveError::TimedOut`] when `deadline` passes first; otherwise as [`drive_messages`].
+pub async fn drive_messages_until<H, T>(
+    handshake: H,
+    transport: &mut T,
+    deadline: Instant,
+) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: MessageTransport,
+{
+    until(deadline, drive_messages(handshake, transport)).await
+}
+
+/// [`complete_messages`] that ends at `deadline`, as [`drive_stream_until`] does.
+///
+/// # Errors
+///
+/// As [`drive_messages_until`].
+pub async fn complete_messages_until<H, T>(
+    handshake: H,
+    transport: &mut T,
+    deadline: Instant,
+) -> Result<H, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: MessageTransport,
+{
+    until(deadline, complete_messages(handshake, transport)).await
 }
 
 /// [`drive_messages`](crate::drive_messages) over an async message transport.

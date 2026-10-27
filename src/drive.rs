@@ -1,7 +1,10 @@
 //! Blocking loops that run a [`Handshake`] over a transport.
 
 use core::fmt;
+use core::time::Duration;
 use std::io::{self, Read, Write};
+use std::net::TcpStream;
+use std::time::Instant;
 
 use crate::method::{Established, Framing, Handshake};
 
@@ -103,6 +106,8 @@ pub enum DriveError<E> {
     Handshake(E),
     /// A peer sent a frame longer than [`MAX_MESSAGE`].
     TooLong,
+    /// The deadline of an `_until` loop passed before the handshake was complete.
+    TimedOut,
 }
 
 impl<E: core::error::Error + 'static> fmt::Display for DriveError<E> {
@@ -111,6 +116,7 @@ impl<E: core::error::Error + 'static> fmt::Display for DriveError<E> {
             Self::Io(_) => formatter.write_str("transport failed during the handshake"),
             Self::Handshake(error) => write!(formatter, "handshake failed: {error}"),
             Self::TooLong => formatter.write_str("handshake message is too long"),
+            Self::TimedOut => formatter.write_str("handshake did not complete before its deadline"),
         }
     }
 }
@@ -120,7 +126,7 @@ impl<E: core::error::Error + 'static> core::error::Error for DriveError<E> {
         match self {
             Self::Io(error) => Some(error),
             Self::Handshake(error) => Some(error),
-            Self::TooLong => None,
+            Self::TooLong | Self::TimedOut => None,
         }
     }
 }
@@ -141,6 +147,80 @@ pub trait MessageTransport {
     ///
     /// When the transport fails or is closed.
     fn recv(&mut self) -> io::Result<Vec<u8>>;
+}
+
+/// A blocking transport whose reads can be bounded in time, as the `_until` loops need to end
+/// at their deadline.
+///
+/// Implemented for [`TcpStream`]. A transport that cannot time out implements it as a no-op;
+/// a loop over it then checks its deadline only between reads, and a read that never returns
+/// holds it past the deadline.
+pub trait ReadTimeout {
+    /// Sets the timeout of every read from now on; `None` waits forever.
+    ///
+    /// # Errors
+    ///
+    /// When the transport refuses the setting.
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+}
+
+impl ReadTimeout for TcpStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+}
+
+/// A transport whose every read waits at most what is left until `until`.
+struct Bounded<'a, T: ?Sized> {
+    io: &'a mut T,
+    until: Instant,
+}
+
+impl<T: ReadTimeout + ?Sized> Bounded<'_, T> {
+    fn arm(&self) -> io::Result<()> {
+        let left = self
+            .until
+            .checked_duration_since(Instant::now())
+            .filter(|left| !left.is_zero())
+            .ok_or(io::ErrorKind::TimedOut)?;
+        self.io.set_read_timeout(Some(left))
+    }
+}
+
+impl<T: Read + ReadTimeout + ?Sized> Read for Bounded<'_, T> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        self.arm()?;
+        self.io.read(buffer)
+    }
+}
+
+impl<T: Write + ?Sized> Write for Bounded<'_, T> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.io.write(buffer)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.io.flush()
+    }
+}
+
+impl<T: MessageTransport + ReadTimeout + ?Sized> MessageTransport for Bounded<'_, T> {
+    fn send(&mut self, message: &[u8]) -> io::Result<()> {
+        self.io.send(message)
+    }
+
+    fn recv(&mut self) -> io::Result<Vec<u8>> {
+        self.arm()?;
+        self.io.recv()
+    }
+}
+
+/// A transport failure once `until` has passed is the deadline's.
+fn past<E>(until: Instant, error: DriveError<E>) -> DriveError<E> {
+    match error {
+        DriveError::Io(_) if Instant::now() >= until => DriveError::TimedOut,
+        other => other,
+    }
 }
 
 /// Runs `handshake` to completion over a blocking byte stream.
@@ -203,6 +283,53 @@ where
             return Err(DriveError::Handshake(error));
         }
     }
+}
+
+/// [`drive_stream`] that ends at `deadline`: every read waits at most what is left until it,
+/// through [`ReadTimeout`], and the read timeout is cleared before it returns. Writes are not
+/// bounded.
+///
+/// # Errors
+///
+/// [`DriveError::TimedOut`] when `deadline` passes first; otherwise as [`drive_stream`].
+pub fn drive_stream_until<H, T>(
+    handshake: H,
+    io: &mut T,
+    deadline: Instant,
+) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: Read + Write + ReadTimeout,
+{
+    complete_stream_until(handshake, io, deadline)?
+        .finish()
+        .map_err(DriveError::Handshake)
+}
+
+/// [`complete_stream`] that ends at `deadline`, as [`drive_stream_until`] does.
+///
+/// # Errors
+///
+/// As [`drive_stream_until`].
+pub fn complete_stream_until<H, T>(
+    handshake: H,
+    io: &mut T,
+    deadline: Instant,
+) -> Result<H, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: Read + Write + ReadTimeout,
+{
+    let result = complete_stream(
+        handshake,
+        &mut Bounded {
+            io: &mut *io,
+            until: deadline,
+        },
+    )
+    .map_err(|error| past(deadline, error));
+    let _ = io.set_read_timeout(None);
+    result
 }
 
 /// Sends everything the handshake has queued, framed when it is message-oriented.
@@ -268,4 +395,51 @@ where
         let message = transport.recv().map_err(DriveError::Io)?;
         handshake.receive(&message).map_err(DriveError::Handshake)?;
     }
+}
+
+/// [`drive_messages`] that ends at `deadline`: every receive waits at most what is left until
+/// it, through [`ReadTimeout`], and the read timeout is cleared before it returns. Sends are not
+/// bounded.
+///
+/// # Errors
+///
+/// [`DriveError::TimedOut`] when `deadline` passes first; otherwise as [`drive_messages`].
+pub fn drive_messages_until<H, T>(
+    handshake: H,
+    transport: &mut T,
+    deadline: Instant,
+) -> Result<Established<H::Output>, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: MessageTransport + ReadTimeout,
+{
+    complete_messages_until(handshake, transport, deadline)?
+        .finish()
+        .map_err(DriveError::Handshake)
+}
+
+/// [`complete_messages`] that ends at `deadline`, as [`drive_messages_until`] does.
+///
+/// # Errors
+///
+/// As [`drive_messages_until`].
+pub fn complete_messages_until<H, T>(
+    handshake: H,
+    transport: &mut T,
+    deadline: Instant,
+) -> Result<H, DriveError<H::Error>>
+where
+    H: Handshake,
+    T: MessageTransport + ReadTimeout,
+{
+    let result = complete_messages(
+        handshake,
+        &mut Bounded {
+            io: &mut *transport,
+            until: deadline,
+        },
+    )
+    .map_err(|error| past(deadline, error));
+    let _ = transport.set_read_timeout(None);
+    result
 }

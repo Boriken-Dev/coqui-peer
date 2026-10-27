@@ -17,7 +17,8 @@ all-features = true
 default = []
 # Serialize and deserialize `PeerId` and `Digest` as their text form.
 serde = ["dep:serde"]
-# Async helpers that drive a handshake over tokio streams and message transports.
+# Async helpers that drive a handshake over tokio streams and message transports; the
+# `_until` forms use tokio's timer.
 tokio = ["dep:tokio"]
 # PIN pairing: SPAKE2 with key confirmation (spake2, hkdf, hmac), and `Random::os` (rand_core,
 # which spake2 already uses, reading the operating system's generator).
@@ -30,7 +31,7 @@ sha2 = { version = "0.11.1", default-features = false }
 subtle = "2.6"
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 serde = { version = "1", default-features = false, features = ["derive", "std"], optional = true }
-tokio = { version = "1", default-features = false, features = ["io-util"], optional = true }
+tokio = { version = "1", default-features = false, features = ["io-util", "time"], optional = true }
 spake2 = { version = "0.4", optional = true }
 hkdf = { version = "0.13", optional = true }
 hmac = { version = "0.13", optional = true }
@@ -39,4 +40,4 @@ rand_core = { version = "0.6", default-features = false, features = ["getrandom"
 [dev-dependencies]
 tempfile = "3"
 serde_json = "1"
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util", "sync"] }
+tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util", "sync", "time"] }
