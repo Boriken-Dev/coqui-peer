@@ -1,12 +1,15 @@
-use std::collections::{HashMap, VecDeque};
-use std::fmt;
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use core::fmt;
+use core::net::{IpAddr, Ipv6Addr, SocketAddr};
+use core::str::FromStr;
+use core::time::Duration;
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, PoisonError};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use sha2::{Digest as _, Sha256};
 
@@ -1143,8 +1146,8 @@ fn replace(path: &Path, text: &str) -> io::Result<()> {
 /// A name beside `path` that no other call of this process uses, and that another process is
 /// unlikely to: the process id, the time and a counter.
 fn temporary_path(path: &Path) -> PathBuf {
-    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let count = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    static NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let count = NEXT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.as_nanos());

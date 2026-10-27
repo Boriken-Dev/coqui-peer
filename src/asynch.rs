@@ -1,7 +1,7 @@
 //! The loops of [`drive_stream`](crate::drive_stream) and
 //! [`drive_messages`](crate::drive_messages) over tokio streams and async message transports.
 
-use std::future::Future;
+use core::future::Future;
 use std::io;
 
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};

@@ -1,6 +1,7 @@
-use std::fmt;
-use std::sync::Arc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use alloc::sync::Arc;
+use core::fmt;
+use core::time::Duration;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The wall clock a [`TrustStore`](crate::TrustStore) or a pairing desk reads for expiry and
 /// retirement times.

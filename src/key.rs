@@ -78,7 +78,7 @@ pub(crate) fn encode_pem(label: &str, bytes: &[u8]) -> String {
     let encoded = data_encoding::BASE64.encode(bytes);
     let mut pem = format!("-----BEGIN {label}-----\n");
     for chunk in encoded.as_bytes().chunks(64) {
-        pem.push_str(std::str::from_utf8(chunk).unwrap_or_default());
+        pem.push_str(core::str::from_utf8(chunk).unwrap_or_default());
         pem.push('\n');
     }
     pem.push_str(&format!("-----END {label}-----\n"));

@@ -25,10 +25,11 @@ mod desk;
 #[cfg(feature = "pin")]
 mod pin;
 
-use std::collections::VecDeque;
-use std::fmt;
-use std::net::SocketAddr;
-use std::time::{Duration, SystemTime};
+use alloc::collections::VecDeque;
+use core::fmt;
+use core::net::SocketAddr;
+use core::time::Duration;
+use std::time::SystemTime;
 
 use zeroize::Zeroizing;
 
@@ -151,8 +152,8 @@ impl fmt::Display for PairingError {
     }
 }
 
-impl std::error::Error for PairingError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for PairingError {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Local(error) => Some(error),
             _ => None,
@@ -521,7 +522,7 @@ impl PairingJoiner {
             reader.end()?;
             return Err(PairingError::Refused(refusal));
         }
-        match (std::mem::replace(&mut self.state, Joining::Failed), tag) {
+        match (core::mem::replace(&mut self.state, Joining::Failed), tag) {
             (Joining::AwaitReply, DONE) if self.mode == Mode::Invitation => {
                 let key = reader.key()?;
                 reader.end()?;
@@ -819,7 +820,7 @@ impl PairingResponder {
 
     fn decide(&mut self, decision: Decision) -> Result<(), PairingError> {
         match (
-            std::mem::replace(&mut self.state, Responding::Failed),
+            core::mem::replace(&mut self.state, Responding::Failed),
             decision,
         ) {
             (Responding::AwaitDecision, Decision::Approved) => self.accept(),
@@ -868,7 +869,7 @@ impl PairingResponder {
             reader.end()?;
             return Err(PairingError::Refused(refusal));
         }
-        match (std::mem::replace(&mut self.state, Responding::Failed), tag) {
+        match (core::mem::replace(&mut self.state, Responding::Failed), tag) {
             (Responding::AwaitHello, HELLO) => self.hello(&mut reader),
             #[cfg(feature = "pin")]
             (Responding::AwaitPake { typed, slot }, PAKE) => {
@@ -1172,8 +1173,8 @@ impl<'a> Reader<'a> {
     }
 
     fn key(&mut self) -> Result<KeyMaterial, PairingError> {
-        let method = std::str::from_utf8(self.short()?).map_err(|_| PairingError::Protocol)?;
-        let label = std::str::from_utf8(self.short()?).map_err(|_| PairingError::Protocol)?;
+        let method = core::str::from_utf8(self.short()?).map_err(|_| PairingError::Protocol)?;
+        let label = core::str::from_utf8(self.short()?).map_err(|_| PairingError::Protocol)?;
         let bytes = self.wide()?;
         KeyMaterial::new(method, label, bytes).map_err(|_| PairingError::Protocol)
     }

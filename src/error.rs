@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 use std::io;
 
 /// Failures of ids, key material and the trust store. No message holds key material or a
@@ -10,7 +10,7 @@ pub enum Error {
     InvalidId,
     /// An id is an MD5 digest, which is not supported.
     WeakDigest,
-    /// A digest name is unknown; the name is carried.
+    /// A digest name is unknown. The variant carries the name; `Display` does not quote it.
     UnknownDigest(String),
     /// Stored key material is malformed, too large, or does not hash to its id.
     Material,
@@ -48,10 +48,9 @@ impl fmt::Display for Error {
             Self::WeakDigest => {
                 formatter.write_str("peer id is an MD5 digest, which is not supported")
             }
-            Self::UnknownDigest(name) => write!(
-                formatter,
-                "unknown digest {name:?}; supported: sha256, sha384, sha512, sha1"
-            ),
+            Self::UnknownDigest(_) => {
+                formatter.write_str("unknown digest name; supported: sha256, sha384, sha512, sha1")
+            }
             Self::Material => formatter.write_str("key material is invalid"),
             Self::NotWaiting => formatter.write_str("peer is not waiting for acceptance"),
             Self::AlreadyAccepted => formatter.write_str("peer is already accepted"),
@@ -71,8 +70,8 @@ impl fmt::Display for Error {
     }
 }
 
-impl std::error::Error for Error {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl core::error::Error for Error {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
             _ => None,

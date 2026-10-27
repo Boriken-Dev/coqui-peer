@@ -20,13 +20,13 @@
 //!   [`Output`](Handshake::Output) (a TLS connection keeps its buffered application data).
 //! - **Nothing global.** A method keeps its state in the handshake value.
 
-use std::net::SocketAddr;
+use core::net::SocketAddr;
 
 use crate::id::PeerId;
 use crate::key::KeyMaterial;
 
 /// How a method divides what it sends.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Framing {
     /// A byte stream: the boundaries between [`receive`](Handshake::receive) calls and
     /// between [`transmit`](Handshake::transmit) results mean nothing, so the bytes may be
@@ -57,7 +57,7 @@ pub trait Handshake {
     /// What a completed handshake yields besides the peer.
     type Output;
     /// Why the handshake failed. Never holds key material.
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
     /// How this method divides what it sends.
     fn framing(&self) -> Framing;

@@ -1,10 +1,13 @@
-use std::collections::{HashMap, VecDeque};
-use std::future::Future;
-use std::net::{IpAddr, SocketAddr};
-use std::pin::Pin as Pinned;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::task::{Context, Poll, Waker};
-use std::time::{Duration, SystemTime};
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
+use core::future::Future;
+use core::net::{IpAddr, SocketAddr};
+use core::pin::Pin as Pinned;
+use core::task::{Context, Poll, Waker};
+use core::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::SystemTime;
 
 use crate::clock::{Clock, later};
 use crate::error::Error;
@@ -240,6 +243,7 @@ pub struct Ticket(u64);
 
 /// How a waiting exchange is settled.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Decision {
     /// The operator typed this PIN for a joiner that shows its own.
     Code(Pin),
@@ -905,7 +909,7 @@ impl Future for Decided {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use core::sync::atomic::{AtomicU64, Ordering};
     use std::time::UNIX_EPOCH;
 
     #[test]

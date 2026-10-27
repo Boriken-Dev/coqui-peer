@@ -1,6 +1,6 @@
 //! Blocking loops that run a [`Handshake`] over a transport.
 
-use std::fmt;
+use core::fmt;
 use std::io::{self, Read, Write};
 
 use crate::method::{Established, Framing, Handshake};
@@ -22,7 +22,7 @@ pub enum DriveError<E> {
     TooLong,
 }
 
-impl<E: std::error::Error + 'static> fmt::Display for DriveError<E> {
+impl<E: core::error::Error + 'static> fmt::Display for DriveError<E> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(_) => formatter.write_str("transport failed during the handshake"),
@@ -32,8 +32,8 @@ impl<E: std::error::Error + 'static> fmt::Display for DriveError<E> {
     }
 }
 
-impl<E: std::error::Error + 'static> std::error::Error for DriveError<E> {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+impl<E: core::error::Error + 'static> core::error::Error for DriveError<E> {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
         match self {
             Self::Io(error) => Some(error),
             Self::Handshake(error) => Some(error),

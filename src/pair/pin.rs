@@ -21,8 +21,8 @@ const RESPONDER: &[u8] = b"coqui-pair responder confirmation";
 /// One side's SPAKE2 state.
 pub(crate) struct Pake(Spake2<Ed25519Group>);
 
-impl std::fmt::Debug for Pake {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Pake {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str("Pake")
     }
 }

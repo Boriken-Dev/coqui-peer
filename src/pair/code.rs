@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use subtle::ConstantTimeEq;
 
@@ -266,9 +266,9 @@ mod tests {
 
     #[test]
     fn generated_codes_use_the_whole_alphabet() {
-        let counter = std::sync::atomic::AtomicU32::new(0);
+        let counter = core::sync::atomic::AtomicU32::new(0);
         let random = Random::from_fn(move |out| {
-            let value = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let value = counter.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
             out.copy_from_slice(&value.to_be_bytes()[..out.len()]);
             Ok(())
         });

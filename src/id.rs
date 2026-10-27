@@ -1,5 +1,5 @@
-use std::fmt;
-use std::str::FromStr;
+use core::fmt;
+use core::str::FromStr;
 
 use sha2::{Digest as _, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
@@ -82,7 +82,7 @@ impl serde::Serialize for Digest {
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for Digest {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
         text.parse().map_err(serde::de::Error::custom)
     }
 }
@@ -97,7 +97,7 @@ impl serde::Serialize for PeerId {
 #[cfg(feature = "serde")]
 impl<'de> serde::Deserialize<'de> for PeerId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let text = <std::borrow::Cow<'de, str>>::deserialize(deserializer)?;
+        let text = <alloc::borrow::Cow<'de, str>>::deserialize(deserializer)?;
         text.parse().map_err(serde::de::Error::custom)
     }
 }
@@ -144,8 +144,8 @@ pub struct PeerId {
     bytes: [u8; 64],
 }
 
-impl std::hash::Hash for PeerId {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+impl core::hash::Hash for PeerId {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.digest.hash(state);
         self.as_bytes().hash(state);
     }
@@ -223,7 +223,7 @@ impl PeerId {
         letters
             .as_bytes()
             .chunks(4)
-            .map(|chunk| std::str::from_utf8(chunk).unwrap_or_default())
+            .map(|chunk| core::str::from_utf8(chunk).unwrap_or_default())
             .collect::<Vec<_>>()
             .join("-")
     }
@@ -345,7 +345,7 @@ mod tests {
         id.hex()
             .as_bytes()
             .chunks(2)
-            .map(|pair| std::str::from_utf8(pair).unwrap().to_uppercase())
+            .map(|pair| core::str::from_utf8(pair).unwrap().to_uppercase())
             .collect::<Vec<_>>()
             .join(":")
     }

@@ -23,9 +23,17 @@
 //! process-global state, and nothing reads a file or an environment variable unless the caller
 //! names a directory.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 #![warn(missing_debug_implementations)]
+#![warn(
+    clippy::std_instead_of_core,
+    clippy::std_instead_of_alloc,
+    clippy::alloc_instead_of_core
+)]
+
+extern crate alloc;
 
 #[cfg(feature = "tokio")]
 pub mod asynch;
