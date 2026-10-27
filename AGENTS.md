@@ -151,6 +151,31 @@ is accepted, not retiring and names `new`. `remove(old)` deletes its pending suc
 are returned, not reported: `take_rotation_events` drains this process's queue (at most 1024,
 oldest dropped); `successors()` and `retiring()` read the state on disk.
 
+## Files and PEM (`coqui_peer::file`, `coqui_peer::pem`)
+
+The writes and the block format the store uses, for method crates that keep files of their own
+(an identity, a configuration).
+
+```rust
+#[non_exhaustive] pub enum Access { Default, OwnerOnly }      // Default: Default; OwnerOnly = 0600 on Unix
+pub fn file::write_new(path: &Path, contents: &[u8], access: Access) -> io::Result<()>;
+pub fn file::replace(path: &Path, contents: &[u8], access: Access) -> io::Result<()>;
+
+#[non_exhaustive] pub struct pem::Block<'a> { pub headers: Vec<&'a str>, pub label: String, pub bytes: Vec<u8> }
+pub fn pem::encode(label: &str, bytes: &[u8]) -> String;      // 64-character lines, LF, ends in "\n"
+pub fn pem::decode(text: &str) -> Option<pem::Block<'_>>;     // the first block and the lines before it
+```
+
+- Both writes create parent directories, write a temporary file beside `path` (named by the
+  process id, the time and a per-process counter, so writes in one instant never share one),
+  sync it, then give it the target's name. `write_new` hard-links it, which fails with
+  `AlreadyExists` when `path` exists: an existing file is never replaced, and of concurrent
+  writers exactly one wins. `replace` renames it over the target, so a reader sees the old
+  contents or the new. The temporary file is removed on every path.
+- `Access::OwnerOnly` is mode `0600` on Unix; on Windows the file inherits its directory's ACL.
+- `pem::decode` returns `None` when no block is complete or its body is not base64; header
+  lines are trimmed.
+
 ## Handshake, Method, drivers
 
 ```rust

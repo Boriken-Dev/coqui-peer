@@ -6,18 +6,20 @@ use core::str::FromStr;
 use core::time::Duration;
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime};
 
 use data_encoding::{HEXLOWER, HEXLOWER_PERMISSIVE};
 use sha2::{Digest as _, Sha256};
 
 use crate::clock::{Clock, from_unix_seconds, unix_seconds};
 use crate::error::Error;
+use crate::file::{self, Access};
 use crate::id::PeerId;
-use crate::key::{KeyMaterial, decode_pem, encode_pem};
+use crate::key::KeyMaterial;
+use crate::pem;
 use crate::random::Random;
 
 /// The version of the on-disk format [`TrustStore`] writes and reads.
@@ -563,7 +565,7 @@ impl TrustStore {
         }
         let mut text = source.map_or_else(String::new, |s| format!("Source: {s}\n"));
         text.push_str(&format!("Method: {}\n", key.method));
-        text.push_str(&encode_pem(&key.label, &key.bytes));
+        text.push_str(&pem::encode(&key.label, &key.bytes));
         let _ = write_new(&self.path("waiting", &id), &text);
     }
 
@@ -618,7 +620,7 @@ impl TrustStore {
     /// it expired, [`Error::Io`] when its file cannot be read or moved.
     pub fn redeem(&self, secret: &[u8; 32]) -> Result<Invitation, Error> {
         let path = self.invitation_path(&InvitationId::of(secret));
-        let claimed = temporary_path(&path);
+        let claimed = file::temporary_path(&path);
         // Renaming is the claim: only one redeemer can move the file away.
         if let Err(error) = fs::rename(&path, &claimed) {
             return Err(if error.kind() == io::ErrorKind::NotFound {
@@ -777,7 +779,7 @@ impl TrustStore {
             "Predecessor: {}\nMethod: {}\n{}",
             old.hex(),
             new.method,
-            encode_pem(&new.label, &new.bytes)
+            pem::encode(&new.label, &new.bytes)
         );
         replace(&self.path("successors", &new_id), &text).map_err(Error::Io)?;
         let path = self.existing("accepted", old).ok_or(Error::NotAccepted)?;
@@ -822,7 +824,7 @@ Proven: {}
             old.hex(),
             key.method,
             unix_seconds(self.clock.now()),
-            encode_pem(&key.label, &key.bytes)
+            pem::encode(&key.label, &key.bytes)
         );
         replace(&self.path("successors", new), &text).map_err(Error::Io)
     }
@@ -1049,7 +1051,7 @@ fn accepted_text(key: &KeyMaterial, successor: Option<&PeerId>, retires: Option<
     if let Some(retires) = retires {
         text.push_str(&format!("Retires: {retires}\n"));
     }
-    text.push_str(&encode_pem(&key.label, &key.bytes));
+    text.push_str(&pem::encode(&key.label, &key.bytes));
     text
 }
 
@@ -1079,7 +1081,12 @@ fn parse_invitation(text: &str) -> Option<(u64, u32, String)> {
 
 /// Reads a store file: header lines, then one PEM block.
 fn parse(text: &str) -> Option<Entry> {
-    let (headers, label, bytes) = decode_pem(text)?;
+    let pem::Block {
+        headers,
+        label,
+        bytes,
+        ..
+    } = pem::decode(text)?;
     let mut method = None;
     let (mut source, mut successor, mut retires) = (None, None, None);
     let (mut predecessor, mut proven) = (None, None);
@@ -1110,47 +1117,10 @@ fn parse(text: &str) -> Option<Entry> {
 
 /// Writes `text` to `path` unless it exists, atomically.
 fn write_new(path: &Path, text: &str) -> io::Result<()> {
-    let temporary = temporary_path(path);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let result = file
-        .write_all(text.as_bytes())
-        .and_then(|()| file.sync_all())
-        .and_then(|()| fs::hard_link(&temporary, path));
-    drop(file);
-    let _ = fs::remove_file(&temporary);
-    result
+    file::write_new(path, text.as_bytes(), Access::Default)
 }
 
 /// Writes `text` to `path`, replacing what is there, atomically.
 fn replace(path: &Path, text: &str) -> io::Result<()> {
-    let temporary = temporary_path(path);
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temporary)?;
-    let result = file
-        .write_all(text.as_bytes())
-        .and_then(|()| file.sync_all());
-    drop(file);
-    let result = result.and_then(|()| fs::rename(&temporary, path));
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-/// A name beside `path` that no other call of this process uses, and that another process is
-/// unlikely to: the process id, the time and a counter.
-fn temporary_path(path: &Path) -> PathBuf {
-    static NEXT: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
-    let count = NEXT.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |elapsed| elapsed.as_nanos());
-    let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{}.{}.{}.tmp", std::process::id(), nonce, count));
-    path.with_file_name(name)
+    file::replace(path, text.as_bytes(), Access::Default)
 }

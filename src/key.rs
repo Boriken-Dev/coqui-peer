@@ -73,58 +73,9 @@ impl KeyMaterial {
     }
 }
 
-/// Encodes `bytes` as a PEM block with 64-character lines and LF line endings.
-pub(crate) fn encode_pem(label: &str, bytes: &[u8]) -> String {
-    let encoded = data_encoding::BASE64.encode(bytes);
-    let mut pem = format!("-----BEGIN {label}-----\n");
-    for chunk in encoded.as_bytes().chunks(64) {
-        pem.push_str(core::str::from_utf8(chunk).unwrap_or_default());
-        pem.push('\n');
-    }
-    pem.push_str(&format!("-----END {label}-----\n"));
-    pem
-}
-
-/// The label and bytes of the first PEM block in `text`, and the header lines before it.
-pub(crate) fn decode_pem(text: &str) -> Option<(Vec<&str>, String, Vec<u8>)> {
-    let mut headers = Vec::new();
-    let mut lines = text.lines();
-    let label = loop {
-        let line = lines.next()?.trim();
-        if let Some(label) = line
-            .strip_prefix("-----BEGIN ")
-            .and_then(|rest| rest.strip_suffix("-----"))
-        {
-            break label.to_owned();
-        }
-        headers.push(line);
-    };
-    let end = format!("-----END {label}-----");
-    let mut body = String::new();
-    loop {
-        let line = lines.next()?.trim();
-        if line == end {
-            break;
-        }
-        body.push_str(line);
-    }
-    let bytes = data_encoding::BASE64.decode(body.as_bytes()).ok()?;
-    Some((headers, label, bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn pem_round_trips_with_headers() {
-        let pem = format!("Method: tls\n{}", encode_pem("CERTIFICATE", &[7; 100]));
-        let (headers, label, bytes) = decode_pem(&pem).unwrap();
-        assert_eq!(headers, ["Method: tls"]);
-        assert_eq!(label, "CERTIFICATE");
-        assert_eq!(bytes, vec![7; 100]);
-        assert!(decode_pem("-----BEGIN X-----\nAAAA\n").is_none());
-    }
 
     #[test]
     fn material_is_checked() {

@@ -7,7 +7,7 @@ use std::path::Path;
 /// `(file under src/, the item)` pairs that may hold process-wide state.
 const ALLOWED: &[(&str, &str)] = &[
     // A counter that keeps temporary file names unique within the process.
-    ("store.rs", "static NEXT"),
+    ("file.rs", "static NEXT"),
 ];
 
 const MARKERS: &[&str] = &["static ", "OnceLock", "LazyLock", "thread_local!"];

@@ -40,10 +40,12 @@ pub mod asynch;
 mod clock;
 mod drive;
 mod error;
+pub mod file;
 mod id;
 mod key;
 mod method;
 pub mod pair;
+pub mod pem;
 mod random;
 mod store;
 
