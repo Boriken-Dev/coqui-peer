@@ -10,7 +10,7 @@ repository = "https://github.com/Boriken-Dev/coqui-peer"
 homepage = "https://boriken-dev.github.io/coqui-peer/"
 keywords = ["peer", "identity", "trust", "pairing", "handshake"]
 categories = ["authentication", "cryptography", "network-programming"]
-exclude = [".*", "*.local.*"]
+exclude = [".*", "*.local.*", "/tools/"]
 
 [package.metadata.docs.rs]
 all-features = true
