@@ -5,20 +5,28 @@ contract and gotchas, so the crate can be used without reading its source. It sh
 package and is self-contained. Development documentation lives with the source at
 <https://github.com/Boriken-Dev/coqui-peer>.
 
-| Feature | Adds | Default |
-| --- | --- | --- |
-| `serde` | `Serialize`/`Deserialize` for `PeerId` and `Digest` as text | off |
-| `tokio` | `tokio` (`io-util`): module `asynch` | off |
-| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`): PIN pairing, `Random::os` | off |
+| Feature | Adds | Needed for | Default |
+| --- | --- | --- | --- |
+| `serde` | `serde`: `Serialize`/`Deserialize` for `PeerId` and `Digest` as their text | text formats the consumer picks | off |
+| `tokio` | `tokio` (`io-util`, `time`): module `asynch` | async drivers and frame functions | off |
+| `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`) | PIN pairing (`Pairing::pin`), `Random::os` | off |
 
-MSRV Rust 1.89. A default build depends on `sha1`, `sha2`, `subtle`, `zeroize` and
-`data-encoding`. No `unsafe` code. Invitation secrets, PINs and the PIN exchange's keys are
-zeroed when dropped (`zeroize`); a `Channel`'s `Debug` hides its binding. No TLS, no crypto
-transport, no process-global state; nothing reads a file or an environment variable unless the
-caller passes a directory. Everything is built in code;
-`serde` is the only way text formats come in, and the consumer picks the format.
+MSRV Rust 1.89. A default build depends on `data-encoding`, `sha1`, `sha2`, `subtle` and
+`zeroize`. Version `0.0.0-alpha.0` is a pre-release; the API may change in any release before
+1.0.
 
-## PeerId, Digest
+Imports: the crate root holds the ids, the store and its queue, `KeyMaterial`, `Clock`,
+`Random`, `Weakening`, the `Handshake`/`Method` traits, the blocking drivers and frame functions,
+and `Error`. Public modules: `pair` (pairing), `asynch` (feature `tokio`), `file` and `pem`.
+
+No `unsafe` code (`#![forbid(unsafe_code)]`). Process-wide state: one counter that keeps
+temporary file names unique. Invitation secrets, PINs and the PIN exchange's keys are zeroed
+when dropped (`zeroize`); a `Channel`'s `Debug` hides its binding. No TLS, no crypto transport;
+nothing reads a file or an environment variable unless the caller passes a directory.
+Everything is built in code; `serde` is the only way text formats come in, and the consumer
+picks the format.
+
+## Ids (`coqui_peer::{PeerId, Digest}`)
 
 ```rust
 #[non_exhaustive] pub enum Digest { Sha256, Sha384, Sha512, Sha1 }
@@ -42,7 +50,7 @@ hex pairs (`AA:BB:...`, with or without the prefix), and 52 base32 characters fo
 Which digests a method accepts is its own allow-list of `Digest` values. Compare ids through
 `==`, not through strings.
 
-## KeyMaterial
+## Key material (`coqui_peer::KeyMaterial`)
 
 ```rust
 pub struct KeyMaterial { pub method: String, pub label: String, pub bytes: Vec<u8> }
@@ -57,7 +65,7 @@ pub const MAX_KEY_BYTES: usize = 65536;
 `method`: `[a-z0-9-]`, 1 to 32 characters, the `<method>` of `coqui-peer-<method>`. `label`: PEM label,
 `[A-Z0-9 ]`, 1 to 64 characters (`CERTIFICATE` for `tls`). `bytes`: 1 to `MAX_KEY_BYTES`.
 
-## TrustStore
+## Trust store (`coqui_peer::TrustStore`)
 
 ```rust
 pub struct TrustStore;                     // Clone
@@ -200,10 +208,10 @@ pub fn pem::decode(text: &str) -> Option<pem::Block<'_>>;     // the first block
 - `pem::decode` returns `None` when no block is complete or its body is not base64; header
   lines are trimmed.
 
-## Handshake, Method, drivers
+## Handshakes and drivers (`coqui_peer`, `coqui_peer::asynch`)
 
 ```rust
-pub enum Framing { Stream, Message }
+pub enum Framing { Stream, Message }               // Copy, Eq, Hash
 pub struct Established<S> { pub peer: PeerId, pub key: Option<KeyMaterial>, pub session: S }
 pub trait Handshake {
     type Output; type Error: std::error::Error + Send + Sync + 'static;
@@ -269,7 +277,7 @@ has no `PeerId` to put in `Established` (`coqui-peer-tls`'s `TlsHandshake::finis
 `drive_*` is `complete_*` followed by `finish`. `is_complete` says the exchange is over;
 `finish` succeeds when the method verified a peer.
 
-## Pairing (module `pair`)
+## Pairing (`coqui_peer::pair`)
 
 How a joiner and a responder come to accept each other's keys, over any reliable, ordered
 channel: TLS (`coqui-peer-tls` runs it), or one that proves nothing. Sans-IO and message-framed:
@@ -338,7 +346,7 @@ impl DeskLimits { pub fn weakened(&self) -> Vec<Weakening>; }
 pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
 pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
 pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }
-pub enum Decision { Code(Pin), Approved, Denied, Expired }
+#[non_exhaustive] pub enum Decision { Code(Pin), Approved, Denied, Expired }
 
 pub struct Rotation;  // announce(&KeyMaterial) -> Vec<u8>; parse(&[u8]) -> Result<KeyMaterial, PairingError>
 ```
@@ -459,13 +467,6 @@ message of one exchange (`joiner <hex>` / `responder <hex>` lines), from keys of
 bytes (1 for the joiner, 2 for the responder, method `example`, label `PUBLIC KEY`), the clock at
 unix 1800000000, and counter random sources; checked by `tests/pair.rs`.
 
-## Errors
-
-`Error` (non-exhaustive): `InvalidId`, `WeakDigest`, `UnknownDigest(String)`, `Material`,
-`NotWaiting`, `AlreadyAccepted`, `NotAccepted`, `NoSuccessor`, `SuccessorTaken`, `NotProven`,
-`NotInvited`, `Expired`, `InvalidOptions`, `InvalidCode`, `Random`, `Io(io::Error)`.
-`Display` never includes key material, secrets or paths.
-
 ## On-disk store format (version 1)
 
 For peers in other languages. UTF-8, LF. Under `<state_dir>/peers/`: `accepted/`, `waiting/`
@@ -502,3 +503,33 @@ Accepting rewrites a waiting file without `Source:`. Vectors: `tests/vectors/sto
 `*.fingerprint` (canonical, bare hex, grouped base32), `example-key.id`, checked by
 `tests/vectors.rs`; the store tree is written at unix time 1800000000 with the invitation
 secret `0xa0..=0xbf`.
+
+## Errors
+
+`Error` (non-exhaustive): `InvalidId`, `WeakDigest`, `UnknownDigest(String)`, `Material`,
+`NotWaiting`, `AlreadyAccepted`, `NotAccepted`, `NoSuccessor`, `SuccessorTaken`, `NotProven`,
+`NotInvited`, `Expired`, `InvalidOptions`, `InvalidCode`, `Random`, `Io(io::Error)`.
+`Display` is one lowercase clause and never includes key material, secrets, paths or the input
+it refused: `UnknownDigest` carries the name, and its `Display` does not quote it.
+
+`DriveError<E>` (non-exhaustive): `Io(io::Error)` (the transport failed or closed),
+`Handshake(E)` (the method refused or failed), `TooLong` (a frame above `MAX_MESSAGE`),
+`TimedOut` (an `_until` loop passed its deadline). `read_frame` / `write_frame` return
+`io::Error`: `InvalidInput` (writing more than `MAX_MESSAGE`), `InvalidData` (a declared length
+above it), `UnexpectedEof` (the stream ended inside a frame).
+
+`pair::PairingError` (non-exhaustive): `Refused(PairRefusal)`, `Protocol`, `Unverified`,
+`Local(Error)`; see Pairing.
+
+## Gotchas
+
+- Compare ids with `==` (constant time), never their text: one id has several spellings.
+- `record_waiting` is only for a peer that proved its key in the handshake (the key-proof
+  contract); calling it for a presented key queues identities anyone can copy.
+- The `_until` drivers need `ReadTimeout` to bound a read; a no-op implementation is bounded only
+  between reads. The async ones need a tokio runtime with its timer enabled.
+- `pair::Decision`, `Error`, `DriveError`, `pair::Mode`, `pair::Shown`, `pair::PairRefusal`,
+  `pair::PairingError`, `Digest` and `RotationEvent` are `#[non_exhaustive]`: a `match` needs a
+  `_` arm.
+- On Windows a rename, link or removal that another handle blocks is retried for about a second
+  before the store or `file` reports it.
