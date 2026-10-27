@@ -80,3 +80,31 @@ fn an_unknown_digest_name_is_carried_but_not_quoted() {
     assert!(matches!(&error, Error::UnknownDigest(name) if name == "secret-name"));
     assert!(!error.to_string().contains("secret-name"), "{error}");
 }
+
+#[test]
+fn grouped_base32_with_padding_bits_set_is_refused() -> Result<(), Error> {
+    let id = PeerId::of(b"a public key");
+    let grouped = id.to_base32_grouped();
+    // The last symbol carries one digest bit and four padding bits; `B` sets a padding bit
+    // where `A` or `Q` would not.
+    let last = grouped.chars().last().map(|symbol| match symbol {
+        'A' => 'B',
+        'Q' => 'R',
+        other => other,
+    });
+    let mut altered = grouped[..grouped.len() - 1].to_owned();
+    altered.extend(last);
+    if altered != grouped {
+        assert!(matches!(altered.parse::<PeerId>(), Err(Error::InvalidId)));
+    }
+    assert_eq!(grouped.to_lowercase().parse::<PeerId>()?, id);
+    let invitation = InvitationId::of(&[7; 32]);
+    assert_eq!(
+        invitation
+            .to_string()
+            .to_uppercase()
+            .parse::<InvitationId>()?,
+        invitation
+    );
+    Ok(())
+}

@@ -1,12 +1,11 @@
 use core::fmt;
 use core::str::FromStr;
 
+use data_encoding::{BASE32_NOPAD, HEXLOWER, HEXLOWER_PERMISSIVE};
 use sha2::{Digest as _, Sha256, Sha384, Sha512};
 use subtle::ConstantTimeEq;
 
 use crate::error::Error;
-
-const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
 /// The algorithm a [`PeerId`] is made with: the `<alg>` of its `<alg>:<hash>` text.
 ///
@@ -186,13 +185,7 @@ impl PeerId {
 
     /// Lowercase hexadecimal of the digest, without the name.
     pub fn hex(&self) -> String {
-        const HEX: &[u8; 16] = b"0123456789abcdef";
-        let mut text = String::with_capacity(self.digest.size() * 2);
-        for byte in self.as_bytes() {
-            text.push(char::from(HEX[usize::from(byte >> 4)]));
-            text.push(char::from(HEX[usize::from(byte & 0x0f)]));
-        }
-        text
+        HEXLOWER.encode(self.as_bytes())
     }
 
     /// The canonical form: the digest name, a colon and [`hex`](PeerId::hex).
@@ -207,20 +200,8 @@ impl PeerId {
         if self.digest != Digest::Sha256 {
             return self.canonical();
         }
-        let mut letters = String::with_capacity(52);
-        let (mut held, mut bits) = (0u32, 0u32);
-        for byte in self.as_bytes() {
-            held = (held << 8) | u32::from(*byte);
-            bits += 8;
-            while bits >= 5 {
-                bits -= 5;
-                letters.push(char::from(BASE32[((held >> bits) & 31) as usize]));
-            }
-        }
-        if bits > 0 {
-            letters.push(char::from(BASE32[((held << (5 - bits)) & 31) as usize]));
-        }
-        letters
+        BASE32_NOPAD
+            .encode(self.as_bytes())
             .as_bytes()
             .chunks(4)
             .map(|chunk| core::str::from_utf8(chunk).unwrap_or_default())
@@ -290,50 +271,27 @@ fn from_hex(hex: &str, named: Option<Digest>) -> Result<PeerId, Error> {
         return Err(Error::InvalidId);
     }
     let mut bytes = [0u8; 64];
-    for (slot, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks(2)) {
-        *slot = (nibble(pair[0])? << 4) | nibble(pair[1])?;
-    }
+    HEXLOWER_PERMISSIVE
+        .decode_mut(hex.as_bytes(), &mut bytes[..digest.size()])
+        .map_err(|_| Error::InvalidId)?;
     Ok(PeerId { digest, bytes })
 }
 
-fn nibble(byte: u8) -> Result<u8, Error> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(Error::InvalidId),
-    }
-}
-
 fn from_base32(value: &str) -> Result<PeerId, Error> {
-    let letters: Vec<u8> = value
+    let letters: String = value
         .chars()
         .filter(|character| !matches!(character, '-' | ' ' | '\t' | '\n' | '\r'))
-        .map(|character| u8::try_from(character.to_ascii_uppercase()).unwrap_or(0))
+        .map(|character| character.to_ascii_uppercase())
         .collect();
+    // 52 symbols carry 260 bits: the 256 of a SHA-256 digest and four padding bits, which the
+    // decoder refuses unless they are zero.
     if letters.len() != 52 {
         return Err(Error::InvalidId);
     }
-    let mut bytes = Vec::with_capacity(33);
-    let (mut held, mut bits) = (0u32, 0u32);
-    for letter in letters {
-        let value = BASE32
-            .iter()
-            .position(|candidate| *candidate == letter)
-            .ok_or(Error::InvalidId)? as u32;
-        held = (held << 5) | value;
-        bits += 5;
-        if bits >= 8 {
-            bits -= 8;
-            bytes.push(((held >> bits) & 0xff) as u8);
-        }
-    }
-    // 52 symbols carry 260 bits: 256 of digest and four zero padding bits.
-    if bytes.len() != 32 || (held & ((1 << bits) - 1)) != 0 {
-        return Err(Error::InvalidId);
-    }
     let mut digest = [0u8; 32];
-    digest.copy_from_slice(&bytes);
+    BASE32_NOPAD
+        .decode_mut(letters.as_bytes(), &mut digest)
+        .map_err(|_| Error::InvalidId)?;
     Ok(PeerId::from_bytes(digest))
 }
 

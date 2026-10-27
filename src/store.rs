@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
+use data_encoding::{HEXLOWER, HEXLOWER_PERMISSIVE};
 use sha2::{Digest as _, Sha256};
 
 use crate::clock::{Clock, from_unix_seconds, unix_seconds};
@@ -119,7 +120,7 @@ impl InvitationId {
 
     /// 64 lowercase hexadecimal characters.
     pub fn hex(&self) -> String {
-        PeerId::from_bytes(self.0).hex()
+        HEXLOWER.encode(&self.0)
     }
 }
 
@@ -141,12 +142,13 @@ impl FromStr for InvitationId {
     /// 64 hexadecimal characters.
     fn from_str(text: &str) -> Result<Self, Error> {
         let text = text.trim();
-        if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        let mut bytes = [0u8; 32];
+        if text.len() != 64 {
             return Err(Error::InvalidId);
         }
-        let id: PeerId = text.parse()?;
-        let mut bytes = [0u8; 32];
-        bytes.copy_from_slice(id.as_bytes());
+        HEXLOWER_PERMISSIVE
+            .decode_mut(text.as_bytes(), &mut bytes)
+            .map_err(|_| Error::InvalidId)?;
         Ok(Self(bytes))
     }
 }
@@ -1018,10 +1020,7 @@ Proven: {}
 
 /// Whether `stem` is a file name this store writes: 64 lowercase hexadecimal characters.
 fn is_hex_name(stem: &str) -> bool {
-    stem.len() == 64
-        && stem
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    stem.len() == 64 && HEXLOWER.decode_mut(stem.as_bytes(), &mut [0u8; 32]).is_ok()
 }
 
 /// The source an address counts against: IPv4 as it is, IPv4-mapped IPv6 as the IPv4 address,
