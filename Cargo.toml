@@ -1,17 +1,20 @@
 [package]
 name = "coqui-peer"
-version = "0.1.0"
+version = "0.0.0-alpha.0"
 description = "Peer identity and trust independent of the authentication method: ids, a trust store with pairing, and a sans-IO handshake trait"
 readme = "README.md"
 edition = "2024"
 rust-version = "1.89"
 license = "MPL-2.0"
 repository = "https://github.com/Boriken-Dev/coqui-peer"
-publish = false
+homepage = "https://boriken-dev.github.io/coqui-peer/"
+keywords = ["peer", "identity", "trust", "pairing", "handshake"]
+categories = ["authentication", "cryptography", "network-programming"]
 exclude = [".*", "*.local.*"]
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
@@ -25,19 +28,28 @@ tokio = ["dep:tokio"]
 pin = ["dep:spake2", "dep:hkdf", "dep:hmac", "dep:rand_core"]
 
 [dependencies]
+# Hex, base32 and the base64 of PEM.
 data-encoding = { version = "2", default-features = false, features = ["alloc"] }
-sha1 = "0.11.0"
+# Digests of ids. Pre-1.0: the RustCrypto hashes' current release line.
+sha1 = { version = "0.11.0", default-features = false }
 sha2 = { version = "0.11.1", default-features = false }
-subtle = "2.6"
+# Constant-time comparison of ids and codes.
+subtle = { version = "2.6", default-features = false }
+# Zeroes secrets when they are dropped.
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
+# The text form of ids, behind `serde`.
 serde = { version = "1", default-features = false, features = ["derive", "std"], optional = true }
+# The async drivers, behind `tokio`.
 tokio = { version = "1", default-features = false, features = ["io-util", "time"], optional = true }
-spake2 = { version = "0.4", optional = true }
-hkdf = { version = "0.13", optional = true }
-hmac = { version = "0.13", optional = true }
+# PIN pairing, behind `pin`. Pre-1.0: the RustCrypto SPAKE2, HKDF and HMAC release lines.
+spake2 = { version = "0.4", default-features = false, optional = true }
+hkdf = { version = "0.13", default-features = false, optional = true }
+hmac = { version = "0.13", default-features = false, optional = true }
+# `Random::os`, behind `pin`; the version spake2 uses. Pre-1.0: rand_core's 0.6 line.
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"], optional = true }
 
 [dev-dependencies]
+# Temporary store directories.
 tempfile = "3"
 serde_json = "1"
 tokio = { version = "1", default-features = false, features = ["macros", "rt", "io-util", "sync", "time"] }
