@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use coqui_peer::{
     DriveError, Established, Framing, Handshake, MessageTransport, PeerId, ReadTimeout,
-    complete_stream_until, drive_messages_until, drive_stream_until, read_frame, write_frame,
+    WriteTimeout, complete_stream_until, drive_messages_until, drive_stream_until, read_frame,
+    write_frame,
 };
 
 #[derive(Debug)]
@@ -107,6 +108,80 @@ fn a_silent_peer_ends_the_stream_loop_at_its_deadline() -> io::Result<()> {
     Ok(())
 }
 
+/// Sends one message far larger than any socket buffer, and expects nothing back.
+struct Flood {
+    sent: bool,
+}
+
+impl Handshake for Flood {
+    type Output = ();
+    type Error = Refused;
+
+    fn framing(&self) -> Framing {
+        Framing::Stream
+    }
+
+    fn receive(&mut self, _: &[u8]) -> Result<(), Refused> {
+        Ok(())
+    }
+
+    fn transmit(&mut self) -> Result<Option<Vec<u8>>, Refused> {
+        if self.sent {
+            return Ok(None);
+        }
+        self.sent = true;
+        Ok(Some(vec![0; 256 << 20]))
+    }
+
+    fn is_complete(&self) -> bool {
+        false
+    }
+
+    fn finish(self) -> Result<Established<()>, Refused> {
+        Err(Refused)
+    }
+}
+
+#[test]
+fn a_peer_that_never_reads_ends_the_stream_loop_at_its_deadline() -> io::Result<()> {
+    // Holds its end open without reading, so the writer's buffers fill. Linux blocks the write;
+    // Windows may buffer a send this size whole, and the loop then ends at its read.
+    let mut socket = pair(|socket| {
+        thread::sleep(Duration::from_secs(30));
+        drop(socket);
+    })?;
+    let (done, result) = std::sync::mpsc::channel();
+    thread::spawn(move || {
+        let started = Instant::now();
+        let outcome = drive_stream_until(
+            Flood { sent: false },
+            &mut socket,
+            started + Duration::from_millis(500),
+        );
+        let cleared = socket.write_timeout().ok().flatten().is_none();
+        let _ = done.send((matches!(outcome, Err(DriveError::TimedOut)), cleared));
+    });
+    let (timed_out, cleared) = result
+        .recv_timeout(Duration::from_secs(15))
+        .expect("the write is bounded by the deadline");
+    assert!(timed_out);
+    assert!(cleared, "the write timeout is cleared");
+    Ok(())
+}
+
+#[test]
+fn a_shared_socket_is_driven_through_a_reference() -> io::Result<()> {
+    let socket = pair(|mut socket| {
+        let _ = read_frame(&mut socket).and_then(|_| write_frame(&mut socket, b"hi"));
+    })?;
+    let mut shared = &socket;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let done = complete_stream_until(Once::new(Framing::Message), &mut shared, deadline);
+    assert!(matches!(done, Ok(once) if once.is_complete()));
+    assert_eq!(socket.read_timeout()?, None);
+    Ok(())
+}
+
 #[test]
 fn a_peer_that_answers_in_time_finishes_the_loop() -> io::Result<()> {
     let mut socket = pair(|mut socket| {
@@ -142,6 +217,12 @@ impl MessageTransport for Framed {
 impl ReadTimeout for Framed {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
         self.0.set_read_timeout(timeout)
+    }
+}
+
+impl WriteTimeout for Framed {
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        self.0.set_write_timeout(timeout)
     }
 }
 

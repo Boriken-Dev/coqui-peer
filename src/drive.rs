@@ -152,9 +152,10 @@ pub trait MessageTransport {
 /// A blocking transport whose reads can be bounded in time, as the `_until` loops need to end
 /// at their deadline.
 ///
-/// Implemented for [`TcpStream`]. A transport that cannot time out implements it as a no-op;
-/// a loop over it then checks its deadline only between reads, and a read that never returns
-/// holds it past the deadline.
+/// Implemented for [`TcpStream`] and `&TcpStream` (a socket shared with another thread, which
+/// may shut it down). A transport that cannot time out implements it as a no-op; a loop over
+/// it then checks its deadline only between reads, and a read that never returns holds it
+/// past the deadline.
 pub trait ReadTimeout {
     /// Sets the timeout of every read from now on; `None` waits forever.
     ///
@@ -170,55 +171,113 @@ impl ReadTimeout for TcpStream {
     }
 }
 
-/// A transport whose every read waits at most what is left until `until`.
+impl ReadTimeout for &TcpStream {
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, timeout)
+    }
+}
+
+/// A blocking transport whose writes can be bounded in time, as the `_until` loops need when
+/// the peer stops reading.
+///
+/// Implemented for [`TcpStream`] and `&TcpStream`. A transport that cannot time out
+/// implements it as a no-op; a write the peer never drains then holds the loop past its
+/// deadline.
+pub trait WriteTimeout {
+    /// Sets the timeout of every write from now on; `None` waits forever.
+    ///
+    /// # Errors
+    ///
+    /// When the transport refuses the setting.
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()>;
+}
+
+impl WriteTimeout for TcpStream {
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_write_timeout(self, timeout)
+    }
+}
+
+impl WriteTimeout for &TcpStream {
+    fn set_write_timeout(&self, timeout: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_write_timeout(self, timeout)
+    }
+}
+
+/// A transport whose every read and write waits at most what is left until `until`.
 struct Bounded<'a, T: ?Sized> {
     io: &'a mut T,
     until: Instant,
 }
 
-impl<T: ReadTimeout + ?Sized> Bounded<'_, T> {
-    fn arm(&self) -> io::Result<()> {
-        let left = self
-            .until
+impl<T: ?Sized> Bounded<'_, T> {
+    /// What is left until the deadline; `TimedOut` once it has passed.
+    fn left(&self) -> io::Result<Duration> {
+        self.until
             .checked_duration_since(Instant::now())
             .filter(|left| !left.is_zero())
-            .ok_or(io::ErrorKind::TimedOut)?;
-        self.io.set_read_timeout(Some(left))
+            .ok_or_else(|| io::ErrorKind::TimedOut.into())
+    }
+}
+
+impl<T: ReadTimeout + ?Sized> Bounded<'_, T> {
+    fn arm_read(&self) -> io::Result<()> {
+        self.io.set_read_timeout(Some(self.left()?))
+    }
+}
+
+impl<T: WriteTimeout + ?Sized> Bounded<'_, T> {
+    fn arm_write(&self) -> io::Result<()> {
+        self.io.set_write_timeout(Some(self.left()?))
     }
 }
 
 impl<T: Read + ReadTimeout + ?Sized> Read for Bounded<'_, T> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.arm()?;
+        self.arm_read()?;
         self.io.read(buffer)
     }
 }
 
-impl<T: Write + ?Sized> Write for Bounded<'_, T> {
+impl<T: Write + WriteTimeout + ?Sized> Write for Bounded<'_, T> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.arm_write()?;
         self.io.write(buffer)
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.arm_write()?;
         self.io.flush()
     }
 }
 
-impl<T: MessageTransport + ReadTimeout + ?Sized> MessageTransport for Bounded<'_, T> {
+impl<T: MessageTransport + ReadTimeout + WriteTimeout + ?Sized> MessageTransport
+    for Bounded<'_, T>
+{
     fn send(&mut self, message: &[u8]) -> io::Result<()> {
+        self.arm_write()?;
         self.io.send(message)
     }
 
     fn recv(&mut self) -> io::Result<Vec<u8>> {
-        self.arm()?;
+        self.arm_read()?;
         self.io.recv()
     }
 }
 
-/// A transport failure once `until` has passed is the deadline's.
+/// A transport failure once `until` has passed is the deadline's, and so is a timeout the
+/// armed bound produced: an operating system may end a timed read or write a little early.
 fn past<E>(until: Instant, error: DriveError<E>) -> DriveError<E> {
     match error {
-        DriveError::Io(_) if Instant::now() >= until => DriveError::TimedOut,
+        DriveError::Io(error)
+            if Instant::now() >= until
+                || matches!(
+                    error.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+        {
+            DriveError::TimedOut
+        }
         other => other,
     }
 }
@@ -285,9 +344,9 @@ where
     }
 }
 
-/// [`drive_stream`] that ends at `deadline`: every read waits at most what is left until it,
-/// through [`ReadTimeout`], and the read timeout is cleared before it returns. Writes are not
-/// bounded.
+/// [`drive_stream`] that ends at `deadline`: every read and write waits at most what is left
+/// until it, through [`ReadTimeout`] and [`WriteTimeout`], and both timeouts are cleared
+/// before it returns.
 ///
 /// # Errors
 ///
@@ -299,7 +358,7 @@ pub fn drive_stream_until<H, T>(
 ) -> Result<Established<H::Output>, DriveError<H::Error>>
 where
     H: Handshake,
-    T: Read + Write + ReadTimeout,
+    T: Read + Write + ReadTimeout + WriteTimeout,
 {
     complete_stream_until(handshake, io, deadline)?
         .finish()
@@ -318,7 +377,7 @@ pub fn complete_stream_until<H, T>(
 ) -> Result<H, DriveError<H::Error>>
 where
     H: Handshake,
-    T: Read + Write + ReadTimeout,
+    T: Read + Write + ReadTimeout + WriteTimeout,
 {
     let result = complete_stream(
         handshake,
@@ -329,6 +388,7 @@ where
     )
     .map_err(|error| past(deadline, error));
     let _ = io.set_read_timeout(None);
+    let _ = io.set_write_timeout(None);
     result
 }
 
@@ -397,9 +457,9 @@ where
     }
 }
 
-/// [`drive_messages`] that ends at `deadline`: every receive waits at most what is left until
-/// it, through [`ReadTimeout`], and the read timeout is cleared before it returns. Sends are not
-/// bounded.
+/// [`drive_messages`] that ends at `deadline`: every receive and send waits at most what is
+/// left until it, through [`ReadTimeout`] and [`WriteTimeout`], and both timeouts are cleared
+/// before it returns.
 ///
 /// # Errors
 ///
@@ -411,7 +471,7 @@ pub fn drive_messages_until<H, T>(
 ) -> Result<Established<H::Output>, DriveError<H::Error>>
 where
     H: Handshake,
-    T: MessageTransport + ReadTimeout,
+    T: MessageTransport + ReadTimeout + WriteTimeout,
 {
     complete_messages_until(handshake, transport, deadline)?
         .finish()
@@ -430,7 +490,7 @@ pub fn complete_messages_until<H, T>(
 ) -> Result<H, DriveError<H::Error>>
 where
     H: Handshake,
-    T: MessageTransport + ReadTimeout,
+    T: MessageTransport + ReadTimeout + WriteTimeout,
 {
     let result = complete_messages(
         handshake,
@@ -441,5 +501,6 @@ where
     )
     .map_err(|error| past(deadline, error));
     let _ = transport.set_read_timeout(None);
+    let _ = transport.set_write_timeout(None);
     result
 }

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The `_until` drivers bound writes as well as reads: they take a transport that implements the
+  new `WriteTimeout` trait beside `ReadTimeout` (`drive_stream_until`, `complete_stream_until`,
+  `drive_messages_until`, `complete_messages_until`), set its write timeout to what is left
+  before every write, send and flush, and clear it before returning. A peer that stops reading
+  ends the loop at its deadline with `DriveError::TimedOut` instead of holding it. A transport
+  of your own implements `WriteTimeout` (a no-op where it cannot time out). A `TimedOut` or
+  `WouldBlock` transport error inside such a loop is reported as `DriveError::TimedOut`.
+
+### Added
+
+- `ReadTimeout` and `WriteTimeout` for `&TcpStream`, so a socket another thread may shut down
+  is driven through a shared reference.
+
 ## [0.0.0-alpha.0] - 2026-10-27
 
 The first pre-release, published to crates.io. The API may change in any release before 1.0.

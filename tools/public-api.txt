@@ -441,15 +441,23 @@ pub fn coqui_peer::Method::name(&self) -> &'static str
 pub fn coqui_peer::Method::respond(&self, core::option::Option<core::net::socket_addr::SocketAddr>) -> core::result::Result<Self::Handshake, <Self::Handshake as coqui_peer::Handshake>::Error>
 pub trait coqui_peer::ReadTimeout
 pub fn coqui_peer::ReadTimeout::set_read_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+impl coqui_peer::ReadTimeout for &std::net::tcp::TcpStream
+pub fn &std::net::tcp::TcpStream::set_read_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
 impl coqui_peer::ReadTimeout for std::net::tcp::TcpStream
 pub fn std::net::tcp::TcpStream::set_read_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+pub trait coqui_peer::WriteTimeout
+pub fn coqui_peer::WriteTimeout::set_write_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+impl coqui_peer::WriteTimeout for &std::net::tcp::TcpStream
+pub fn &std::net::tcp::TcpStream::set_write_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
+impl coqui_peer::WriteTimeout for std::net::tcp::TcpStream
+pub fn std::net::tcp::TcpStream::set_write_timeout(&self, core::option::Option<core::time::Duration>) -> core::io::error::Result<()>
 pub fn coqui_peer::complete_messages<H, T>(H, &mut T) -> core::result::Result<H, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: coqui_peer::MessageTransport
-pub fn coqui_peer::complete_messages_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<H, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: coqui_peer::MessageTransport + coqui_peer::ReadTimeout
+pub fn coqui_peer::complete_messages_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<H, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: coqui_peer::MessageTransport + coqui_peer::ReadTimeout + coqui_peer::WriteTimeout
 pub fn coqui_peer::complete_stream<H, T>(H, &mut T) -> core::result::Result<H, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write
-pub fn coqui_peer::complete_stream_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<H, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write + coqui_peer::ReadTimeout
+pub fn coqui_peer::complete_stream_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<H, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write + coqui_peer::ReadTimeout + coqui_peer::WriteTimeout
 pub fn coqui_peer::drive_messages<H, T>(H, &mut T) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: coqui_peer::MessageTransport
-pub fn coqui_peer::drive_messages_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: coqui_peer::MessageTransport + coqui_peer::ReadTimeout
+pub fn coqui_peer::drive_messages_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: coqui_peer::MessageTransport + coqui_peer::ReadTimeout + coqui_peer::WriteTimeout
 pub fn coqui_peer::drive_stream<H, T>(H, &mut T) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write
-pub fn coqui_peer::drive_stream_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write + coqui_peer::ReadTimeout
+pub fn coqui_peer::drive_stream_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write + coqui_peer::ReadTimeout + coqui_peer::WriteTimeout
 pub fn coqui_peer::read_frame<R: alloc::io::read::Read + ?core::marker::Sized>(&mut R) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub fn coqui_peer::write_frame<W: core::io::write::Write + ?core::marker::Sized>(&mut W, &[u8]) -> core::io::error::Result<()>

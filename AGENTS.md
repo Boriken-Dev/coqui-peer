@@ -232,26 +232,29 @@ pub fn drive_stream<H: Handshake, T: Read + Write>(H, &mut T) -> Result<Establis
 pub fn drive_messages<H: Handshake, T: MessageTransport>(H, &mut T) -> Result<Established<H::Output>, DriveError<H::Error>>;
 pub fn complete_stream<H: Handshake, T: Read + Write>(H, &mut T) -> Result<H, DriveError<H::Error>>;
 pub fn complete_messages<H: Handshake, T: MessageTransport>(H, &mut T) -> Result<H, DriveError<H::Error>>;
-pub trait ReadTimeout { fn set_read_timeout(&self, Option<Duration>) -> io::Result<()>; }   // TcpStream
-pub fn drive_stream_until<H: Handshake, T: Read + Write + ReadTimeout>(H, &mut T, deadline: Instant) -> Result<Established<H::Output>, DriveError<H::Error>>;
-pub fn complete_stream_until<H: Handshake, T: Read + Write + ReadTimeout>(H, &mut T, deadline: Instant) -> Result<H, DriveError<H::Error>>;
-pub fn drive_messages_until<H: Handshake, T: MessageTransport + ReadTimeout>(H, &mut T, deadline: Instant) -> Result<Established<H::Output>, DriveError<H::Error>>;
-pub fn complete_messages_until<H: Handshake, T: MessageTransport + ReadTimeout>(H, &mut T, deadline: Instant) -> Result<H, DriveError<H::Error>>;
+pub trait ReadTimeout { fn set_read_timeout(&self, Option<Duration>) -> io::Result<()>; }     // TcpStream, &TcpStream
+pub trait WriteTimeout { fn set_write_timeout(&self, Option<Duration>) -> io::Result<()>; }   // TcpStream, &TcpStream
+pub fn drive_stream_until<H: Handshake, T: Read + Write + ReadTimeout + WriteTimeout>(H, &mut T, deadline: Instant) -> Result<Established<H::Output>, DriveError<H::Error>>;
+pub fn complete_stream_until<H: Handshake, T: Read + Write + ReadTimeout + WriteTimeout>(H, &mut T, deadline: Instant) -> Result<H, DriveError<H::Error>>;
+pub fn drive_messages_until<H: Handshake, T: MessageTransport + ReadTimeout + WriteTimeout>(H, &mut T, deadline: Instant) -> Result<Established<H::Output>, DriveError<H::Error>>;
+pub fn complete_messages_until<H: Handshake, T: MessageTransport + ReadTimeout + WriteTimeout>(H, &mut T, deadline: Instant) -> Result<H, DriveError<H::Error>>;
 #[non_exhaustive] pub enum DriveError<E> { Io(io::Error), Handshake(E), TooLong, TimedOut }
 pub const MAX_MESSAGE: usize = 1 << 20;
 pub fn write_frame<W: Write + ?Sized>(io: &mut W, message: &[u8]) -> io::Result<()>;   // length, message, flush
 pub fn read_frame<R: Read + ?Sized>(io: &mut R) -> io::Result<Vec<u8>>;
 // feature tokio, module asynch: MessageTransport (async fns), drive_stream, drive_messages,
-// complete_stream, complete_messages, their _until forms (no ReadTimeout bound: tokio's timer),
+// complete_stream, complete_messages, their _until forms (no timeout bounds: tokio's timer),
 // write_frame, read_frame (AsyncWrite / AsyncRead + Unpin)
 ```
 
 **Deadlines.** The `_until` forms run the same loops and end at `deadline` (a
 `std::time::Instant`) with `DriveError::TimedOut`. The blocking ones set the transport's read
-timeout to what is left before every read (`ReadTimeout`, implemented for `TcpStream`), map a
-transport error after the deadline to `TimedOut`, and clear the read timeout (`None`) before
-returning; writes are not bounded. A transport that cannot time out implements `ReadTimeout`
-as a no-op and is then bounded only between reads. The async ones wrap the loop in
+timeout before every read and its write timeout before every write and flush to what is left
+(`ReadTimeout`, `WriteTimeout`, both implemented for `TcpStream` and `&TcpStream`, so a socket
+shared with a thread that may shut it down is driven through a reference), map a transport
+error after the deadline, or a `TimedOut` / `WouldBlock` one, to `TimedOut`, and clear both
+timeouts (`None`) before returning. A transport that cannot time out implements the traits as
+no-ops and is then bounded only between reads and writes. The async ones wrap the loop in
 `tokio::time::timeout_at`, so the runtime needs its timer enabled (tokio panics otherwise).
 
 **Frames.** One format for every length-prefixed message: four big-endian length bytes, then
@@ -526,8 +529,8 @@ above it), `UnexpectedEof` (the stream ended inside a frame).
 - Compare ids with `==` (constant time), never their text: one id has several spellings.
 - `record_waiting` is only for a peer that proved its key in the handshake (the key-proof
   contract); calling it for a presented key queues identities anyone can copy.
-- The `_until` drivers need `ReadTimeout` to bound a read; a no-op implementation is bounded only
-  between reads. The async ones need a tokio runtime with its timer enabled.
+- The `_until` drivers need `ReadTimeout` and `WriteTimeout` to bound a read or a write; a no-op
+  implementation is bounded only between them. The async ones need a tokio runtime with its timer enabled.
 - `pair::Decision`, `Error`, `DriveError`, `pair::Mode`, `pair::Shown`, `pair::PairRefusal`,
   `pair::PairingError`, `Digest` and `RotationEvent` are `#[non_exhaustive]`: a `match` needs a
   `_` arm.
