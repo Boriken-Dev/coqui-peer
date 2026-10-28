@@ -127,6 +127,30 @@ impl WaitingQueue {
         forgotten
     }
 
+    /// Forgets every entry the host no longer stores (`stored` is false for it) once its
+    /// [`rerecord`](WaitingLimits::rerecord) time has passed; within it the entry still keeps
+    /// the same peer from being recorded again from its source.
+    ///
+    /// For a host whose entries another process may accept or remove: without it, the queue
+    /// remembers them, and its memory grows with every source it has seen.
+    pub fn prune(&mut self, now: Instant, stored: impl Fn(&PeerId) -> bool) {
+        let rerecord = self.limits.rerecord;
+        for held in self.sources.values_mut() {
+            held.retain(|(id, at)| stored(id) || now.saturating_duration_since(*at) < rerecord);
+        }
+        self.sources.retain(|_, held| !held.is_empty());
+    }
+
+    /// The number of entries remembered, across every source.
+    pub fn len(&self) -> usize {
+        self.sources.values().map(VecDeque::len).sum()
+    }
+
+    /// Whether nothing is remembered.
+    pub fn is_empty(&self) -> bool {
+        self.sources.is_empty()
+    }
+
     /// Forgets `id` from every source, as when the host accepts or removes it.
     pub fn forget(&mut self, id: &PeerId) {
         for held in self.sources.values_mut() {

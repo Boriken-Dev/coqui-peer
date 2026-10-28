@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `ReadTimeout` and `WriteTimeout` for `&TcpStream`, so a socket another thread may shut down
   is driven through a shared reference.
+- `WaitingQueue::prune`, which forgets the entries a host no longer stores once their rerecord
+  time has passed, and `WaitingQueue::len` / `is_empty`.
+
+### Fixed
+
+- `TrustStore::record_waiting` prunes its in-memory waiting queue against the `waiting/`
+  directory before deciding. Entries another process accepted or removed were remembered for
+  the life of the process, so the queue grew with every source it had seen.
 
 ## [0.0.0-alpha.0] - 2026-10-27
 

@@ -143,6 +143,8 @@ impl WaitingQueue {
     pub fn admit(&mut self, id: PeerId, source: Option<SocketAddr>, stored: usize, now: Instant) -> Admission;
     pub fn remember(&mut self, id: PeerId, source: Option<SocketAddr>, at: Instant) -> Vec<PeerId>;
     pub fn forget(&mut self, id: &PeerId);
+    pub fn prune(&mut self, now: Instant, stored: impl Fn(&PeerId) -> bool);
+    pub fn len(&self) -> usize;  pub fn is_empty(&self) -> bool;
 }
 #[non_exhaustive] pub struct Admission { pub record: bool, pub evict: Vec<PeerId> }
 ```
@@ -152,8 +154,13 @@ above, `record` is false and nothing is evicted (the newcomer waits); the same i
 source within `rerecord` is not recorded again; otherwise `record` is true and `evict` lists
 that source's oldest entries past `per_source`, which the host removes. The host skips `admit`
 for an id it already stores. `remember` seeds the queue from stored entries (placed by time;
-returns the ones past `per_source`), `forget` drops an id the host accepted or removed. Sources
-are bucketed as in the store. The queue keeps what it admitted in memory only.
+returns the ones past `per_source`), `forget` drops an id the host accepted or removed.
+`prune` forgets every entry `stored` says the host no longer holds once its `rerecord` time has
+passed (within it, the entry still throttles that peer from that source): for a host whose
+entries another process may accept or remove, whose queue otherwise grows with every source it
+has seen. `len` counts the entries remembered. Sources are bucketed as in the store. The queue
+keeps what it admitted in memory only; `TrustStore::record_waiting` prunes it against the
+`waiting/` directory before each decision.
 
 **Invitations.** `invite` draws a 32-byte secret from `random` and writes only its SHA-256
 (the `InvitationId`), its expiry, uses and label: the caller hands the secret to the joiner

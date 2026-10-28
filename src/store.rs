@@ -539,13 +539,14 @@ impl TrustStore {
         if self.existing("waiting", &id).is_some() {
             return;
         }
-        let Ok(entries) = fs::read_dir(self.root.join("waiting")) else {
+        let Ok(stored) = self.list("waiting") else {
             return;
         };
+        let now = Instant::now();
         let mut queue = self.queue();
-        let total = queue.limits().total;
-        let stored = entries.take(total).count();
-        let admission = queue.admit(id, source, stored, Instant::now());
+        // Another process (an operator's command) may have accepted or removed entries.
+        queue.prune(now, |had| stored.binary_search(had).is_ok());
+        let admission = queue.admit(id, source, stored.len(), now);
         if !admission.record {
             return;
         }

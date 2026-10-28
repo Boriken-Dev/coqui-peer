@@ -139,3 +139,34 @@ fn a_queue_seeded_from_stored_entries_applies_the_same_bounds() {
             .record
     );
 }
+
+#[test]
+fn entries_the_host_no_longer_stores_are_forgotten_after_their_rerecord_time() {
+    let mut queue = WaitingQueue::new(limits(16, 100));
+    let now = Instant::now();
+    for n in 1..=3 {
+        assert!(
+            queue
+                .admit(id(n), from(&format!("192.0.2.{n}:1")), 0, now)
+                .record
+        );
+    }
+    assert_eq!(queue.len(), 3);
+    // Another process removed 1 and 2; 3 is still stored.
+    let stored = |had: &PeerId| *had == id(3);
+    queue.prune(now + Duration::from_secs(59), stored);
+    assert_eq!(
+        queue.len(),
+        3,
+        "within rerecord a removed entry still throttles"
+    );
+    assert!(
+        !queue
+            .admit(id(1), from("192.0.2.1:2"), 1, now + Duration::from_secs(59))
+            .record
+    );
+    queue.prune(now + Duration::from_secs(60), stored);
+    assert_eq!(queue.len(), 1);
+    queue.prune(now + Duration::from_secs(600), |_| false);
+    assert!(queue.is_empty());
+}
