@@ -6,10 +6,10 @@ has no TLS and no crypto transport. It holds what every authentication method sh
 handshake trait that runs over byte streams and message transports alike.
 
 !!! note "Alpha"
-    `0.0.0-alpha.0` is a pre-release: the API may change in any release before 1.0.
+    `0.0.0-alpha.1` is a pre-release: the API may change in any release before 1.0.
 
 ```toml
-coqui-peer = "0.0.0-alpha.0"
+coqui-peer = "0.0.0-alpha.1"
 ```
 
 [Pairing](pairing.md) explains how two devices come to trust each other's keys by an

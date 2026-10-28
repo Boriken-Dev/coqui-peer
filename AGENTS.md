@@ -12,7 +12,7 @@ package and is self-contained. Development documentation lives with the source a
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`) | PIN pairing (`Pairing::pin`), `Random::os` | off |
 
 MSRV Rust 1.89. A default build depends on `data-encoding`, `sha1`, `sha2`, `subtle` and
-`zeroize`. Version `0.0.0-alpha.0` is a pre-release; the API may change in any release before
+`zeroize`. Version `0.0.0-alpha.1` is a pre-release; the API may change in any release before
 1.0.
 
 Imports: the crate root holds the ids, the store and its queue, `KeyMaterial`, `Clock`,

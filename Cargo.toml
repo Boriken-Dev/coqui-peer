@@ -1,6 +1,6 @@
 [package]
 name = "coqui-peer"
-version = "0.0.0-alpha.0"
+version = "0.0.0-alpha.1"
 description = "Peer identity and trust independent of the authentication method: ids, a trust store with pairing, and a sans-IO handshake trait"
 readme = "README.md"
 edition = "2024"

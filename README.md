@@ -12,7 +12,7 @@ rotation, and a sans-IO handshake trait. A method lives in a crate of its own;
 [`coqui-peer-tls`](https://crates.io/crates/coqui-peer-tls) is the TLS one. See the
 [documentation](https://boriken-dev.github.io/coqui-peer/).
 
-> **Status: alpha.** `0.0.0-alpha.0` is a pre-release: the API may change in any release
+> **Status: alpha.** `0.0.0-alpha.1` is a pre-release: the API may change in any release
 > before 1.0.
 
 ## Features
@@ -40,7 +40,7 @@ rotation, and a sans-IO handshake trait. A method lives in a crate of its own;
 ## Installation
 
 ```bash
-cargo add coqui-peer@0.0.0-alpha.0
+cargo add coqui-peer@0.0.0-alpha.1
 ```
 
 | Feature | Adds | Needed for | Default |
