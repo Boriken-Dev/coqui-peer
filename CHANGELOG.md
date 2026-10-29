@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.0.0-alpha.1] - 2026-10-29
+
 ### Changed
 
 - The `_until` drivers bound writes as well as reads: they take a transport that implements the
@@ -82,5 +84,6 @@ The first pre-release, published to crates.io. The API may change in any release
   `pair::Channel`'s `Debug` hides its binding. Error messages never quote input, key material
   or paths.
 
-[Unreleased]: https://github.com/Boriken-Dev/coqui-peer/compare/v0.0.0-alpha.0...HEAD
+[Unreleased]: https://github.com/Boriken-Dev/coqui-peer/compare/v0.0.0-alpha.1...HEAD
+[0.0.0-alpha.1]: https://github.com/Boriken-Dev/coqui-peer/compare/v0.0.0-alpha.0...v0.0.0-alpha.1
 [0.0.0-alpha.0]: https://github.com/Boriken-Dev/coqui-peer/releases/tag/v0.0.0-alpha.0
