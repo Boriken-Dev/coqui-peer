@@ -28,6 +28,7 @@ theme:
 nav:
   - Home: index.md
   - Pairing: pairing.md
+  - Browser WebCrypto: webcrypto.md
   - Rust API: https://boriken-dev.github.io/coqui-peer/rust/index.html
 
 markdown_extensions:

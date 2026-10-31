@@ -9,7 +9,7 @@
 **Who a peer is, and whether we trust it**, with no TLS and no cryptographic transport. This is
 the core every authentication method shares: the peer id, a trust store with pairing and key
 rotation, and a sans-IO handshake trait. A method lives in a crate of its own;
-[`coqui-peer-tls`](https://crates.io/crates/coqui-peer-tls) is the TLS one. See the
+[`coqui-peer-tls`](https://crates.io/crates/coqui-peer-tls) is the TLS one. The experimental [WebCrypto method](methods/webcrypto/README.md) is for browsers. See the
 [documentation](https://boriken-dev.github.io/coqui-peer/).
 
 > **Status: alpha.** `0.0.0-alpha.1` is a pre-release: the API may change in any release
