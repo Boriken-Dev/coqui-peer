@@ -23,6 +23,8 @@ const verifiedServerPeerId = await auth.finish(await messageChannel.receive());
 
 Node 22+ tests: `npm test`.
 
+The byte-level on-wire contract for another implementation is in [PROTOCOL.md](PROTOCOL.md).
+
 ## Integration boundaries
 
 - `coqui-net-transport`: WebTransport, WSS fallback, stream framing, queuing of messages through the authentication boundary.
