@@ -5,7 +5,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use coqui_peer::{Established, Framing, Handshake, KeyMaterial, Method, PeerId};
+use coqui_peer::{Established, Framing, Handshake, KeyMaterial, Method, PeerId, TrustStore};
 use p256::ecdsa::signature::{Signer, Verifier};
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use p256::pkcs8::{DecodePublicKey, EncodePublicKey};
@@ -131,12 +131,14 @@ pub struct WebCryptoMethod {
     signing: SigningKey,
     der: Vec<u8>,
     permitted: Arc<BTreeSet<PeerId>>,
+    store: Option<TrustStore>,
 }
 impl fmt::Debug for WebCryptoMethod {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("WebCryptoMethod")
             .field("peer_id", &self.peer_id())
             .field("permitted_count", &self.permitted.len())
+            .field("uses_store", &self.store.is_some())
             .finish()
     }
 }
@@ -144,11 +146,26 @@ impl WebCryptoMethod {
     pub fn new(signing: SigningKey, permitted: BTreeSet<PeerId>) -> Result<Self, ProofError> {
         let der = signing.verifying_key().to_public_key_der()
             .map_err(|_| ProofError::Crypto)?.as_bytes().to_vec();
-        Ok(Self { signing, der, permitted: Arc::new(permitted) })
+        Ok(Self { signing, der, permitted: Arc::new(permitted), store: None })
     }
 
     pub fn generate(permitted: BTreeSet<PeerId>) -> Result<Self, ProofError> {
         Self::new(SigningKey::random(&mut OsRng), permitted)
+    }
+
+    /// Read trust and revocations from the canonical coqui-peer TrustStore
+    /// on each verified connection, rather than snapshotting an allowlist.
+    pub fn with_trust_store(signing: SigningKey, store: TrustStore) -> Result<Self, ProofError> {
+        let mut method = Self::new(signing, BTreeSet::new())?;
+        method.store = Some(store);
+        Ok(method)
+    }
+
+    fn accepts(&self, material: &KeyMaterial) -> bool {
+        if let Some(store) = &self.store {
+            return store.accepted_key(&material.id()).as_ref() == Some(material);
+        }
+        self.permitted.contains(&material.id())
     }
 
     pub fn peer_id(&self) -> PeerId {
@@ -242,7 +259,7 @@ impl Handshake for WebCryptoHandshake {
                     &public, "client",
                     message.signature.as_deref().ok_or(ProofError::InvalidMessage)?
                 )?;
-                if !self.method.permitted.contains(&material.id()) {
+                if !self.method.accepts(&material) {
                     return Err(ProofError::Untrusted);
                 }
                 let accepted = json!({
@@ -280,6 +297,21 @@ impl Handshake for WebCryptoHandshake {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trust_store_acceptance_and_revocation_apply_without_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = TrustStore::open(dir.path()).unwrap();
+        let client = WebCryptoMethod::generate(BTreeSet::new()).unwrap();
+        let material = KeyMaterial::new(METHOD_NAME, "PUBLIC KEY", client.public_der()).unwrap();
+        let signing = SigningKey::random(&mut OsRng);
+        let server = WebCryptoMethod::with_trust_store(signing, store.clone()).unwrap();
+        assert!(!server.accepts(&material));
+        assert_eq!(store.accept_key(&material).unwrap(), client.peer_id());
+        assert!(server.accepts(&material));
+        assert!(store.remove(&client.peer_id()).unwrap());
+        assert!(!server.accepts(&material));
+    }
+
     #[test]
     fn unauthorised_key_is_not_paired() {
         let server = WebCryptoMethod::generate(BTreeSet::new()).unwrap();
