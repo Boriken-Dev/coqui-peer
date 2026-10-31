@@ -56,4 +56,4 @@ Both role and position are significant. Do not sign JSON serialization directly;
 
 ## Implementation status
 
-The JavaScript/WebCrypto method and adversarial Node tests are implemented. A native Rust responder implementing `coqui_peer::Method` / `Handshake`, device-flow or invitation pairing with `TrustStore`, and cross-language interoperability vectors are **not yet implemented**. Implement and test them before advertising this as a standardized production method.
+The JavaScript WebCrypto method and a native Rust responder implementing `coqui_peer::Method` / `Handshake` are implemented. Cross-language CI tests exercise a JavaScript initiator against the Rust responder, including rejection of an unpaired client. The native responder can consult the canonical `TrustStore` at authorization time, including revocation. A native Rust initiator, a complete pairing workflow, credential persistence and external interoperability/security review are **not yet implemented**; this remains an experimental draft, not a standardized production method.
