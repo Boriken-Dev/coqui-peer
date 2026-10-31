@@ -179,7 +179,7 @@ impl Method for WebCryptoMethod {
 enum State {
     Hello,
     Proof {
-        transcript: Transcript,
+        transcript: Box<Transcript>,
         public: VerifyingKey,
         material: KeyMaterial,
     },
@@ -233,7 +233,7 @@ impl Handshake for WebCryptoHandshake {
                 self.outbound.push_back(
                     serde_json::to_vec(&challenge).map_err(|_| ProofError::InvalidMessage)?
                 );
-                self.state = State::Proof { transcript, public, material };
+                self.state = State::Proof { transcript: Box::new(transcript), public, material };
                 Ok(())
             }
             State::Proof { transcript, public, material } => {
