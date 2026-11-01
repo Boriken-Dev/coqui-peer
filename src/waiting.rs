@@ -2,11 +2,29 @@
 
 use alloc::collections::VecDeque;
 use core::net::{IpAddr, SocketAddr};
+use core::time::Duration;
 use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::id::PeerId;
 use crate::store::{DEFAULT_IPV6_PREFIX, WaitingLimits, source_key};
+
+/// The least time between two new records from one source, unless
+/// [`with_record_interval`](WaitingQueue::with_record_interval) says otherwise.
+pub const DEFAULT_RECORD_INTERVAL: Duration = Duration::from_secs(1);
+
+/// What a source at [`per_source`](WaitingLimits::per_source) entries does with a newcomer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum WhenFull {
+    /// Refuses the newcomer and leaves those waiting alone. A flood can fill a source, so that
+    /// nobody new is recorded from it until an operator clears it, but cannot remove anyone.
+    #[default]
+    Refuse,
+    /// Replaces the source's oldest entry. Peers sharing a source (everyone behind one reverse
+    /// proxy, when it is what connects) can then flush each other from the queue.
+    ReplaceOldest,
+}
 
 /// What [`WaitingQueue::admit`] decided for one peer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,8 +32,8 @@ use crate::store::{DEFAULT_IPV6_PREFIX, WaitingLimits, source_key};
 pub struct Admission {
     /// Whether to record the peer as waiting now.
     pub record: bool,
-    /// Entries of the same source to remove first, oldest first: the source holds
-    /// [`per_source`](WaitingLimits::per_source) entries at most.
+    /// Entries of the same source to remove first, oldest first; always empty unless the queue
+    /// is [`WhenFull::ReplaceOldest`].
     pub evict: Vec<PeerId>,
 }
 
@@ -32,6 +50,8 @@ pub struct Admission {
 pub struct WaitingQueue {
     limits: WaitingLimits,
     ipv6_prefix: u8,
+    when_full: WhenFull,
+    record_interval: Duration,
     sources: HashMap<Option<IpAddr>, VecDeque<(PeerId, Instant)>>,
 }
 
@@ -41,6 +61,8 @@ impl WaitingQueue {
         Self {
             limits,
             ipv6_prefix: DEFAULT_IPV6_PREFIX,
+            when_full: WhenFull::default(),
+            record_interval: DEFAULT_RECORD_INTERVAL,
             sources: HashMap::new(),
         }
     }
@@ -50,6 +72,33 @@ impl WaitingQueue {
     pub fn with_ipv6_prefix(mut self, bits: u8) -> Self {
         self.ipv6_prefix = bits.min(128);
         self
+    }
+
+    /// This queue doing `when_full` with a newcomer to a full source; [`WhenFull::Refuse`] unless
+    /// set.
+    #[must_use]
+    pub fn with_when_full(mut self, when_full: WhenFull) -> Self {
+        self.when_full = when_full;
+        self
+    }
+
+    /// This queue recording a new peer from one source at most once per `interval`, each record
+    /// being a synced write a stranger can cause; [`DEFAULT_RECORD_INTERVAL`] unless set, and zero
+    /// is no limit.
+    #[must_use]
+    pub fn with_record_interval(mut self, interval: Duration) -> Self {
+        self.record_interval = interval;
+        self
+    }
+
+    /// What it does with a newcomer to a full source.
+    pub fn when_full(&self) -> WhenFull {
+        self.when_full
+    }
+
+    /// The least time between two new records from one source.
+    pub fn record_interval(&self) -> Duration {
+        self.record_interval
     }
 
     /// The limits it applies.
@@ -67,8 +116,10 @@ impl WaitingQueue {
     /// `stored` is how many waiting entries the host holds; at
     /// [`total`](WaitingLimits::total) or above, nothing is recorded (the newcomer waits, no
     /// entry is dropped for it). The same peer from the same source is recorded again only
-    /// after [`rerecord`](WaitingLimits::rerecord). A source past
-    /// [`per_source`](WaitingLimits::per_source) gives up its oldest entries, listed in
+    /// after [`rerecord`](WaitingLimits::rerecord). A source records a new peer at most once per
+    /// [`record_interval`](WaitingQueue::record_interval). A source at
+    /// [`per_source`](WaitingLimits::per_source) does what [`WhenFull`] says: by default the
+    /// newcomer is not recorded; with [`WhenFull::ReplaceOldest`] its oldest entries are listed in
     /// [`Admission::evict`] for the host to remove. The host checks itself whether `id` is
     /// already stored, and does not call this then.
     pub fn admit(
@@ -92,7 +143,17 @@ impl WaitingQueue {
         }) {
             return refused;
         }
+        let interval = self.record_interval;
+        if held
+            .iter()
+            .any(|(_, at)| now.saturating_duration_since(*at) < interval)
+        {
+            return refused;
+        }
         held.retain(|(had, _)| *had != id);
+        if self.when_full == WhenFull::Refuse && held.len() >= self.limits.per_source {
+            return refused;
+        }
         held.push_back((id, now));
         let mut evict = Vec::new();
         while held.len() > self.limits.per_source {

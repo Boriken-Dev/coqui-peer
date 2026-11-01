@@ -20,7 +20,7 @@ use crate::id::PeerId;
 use crate::key::KeyMaterial;
 use crate::pem;
 use crate::random::Random;
-use crate::waiting::WaitingQueue;
+use crate::waiting::{WaitingQueue, WhenFull};
 
 /// The version of the on-disk format [`TrustStore`] writes and reads.
 pub const FORMAT_VERSION: u32 = 1;
@@ -38,8 +38,9 @@ pub(crate) const DEFAULT_IPV6_PREFIX: u8 = 64;
 /// Bounds on the waiting queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitingLimits {
-    /// Entries one source may hold; the oldest of its own is replaced. A source is an IPv4
-    /// address, or an IPv6 prefix ([`TrustStore::with_ipv6_prefix`], /64 by default).
+    /// Entries one source may hold; past it, a newcomer is refused unless the store says otherwise
+    /// ([`TrustStore::with_when_full`]). A source is an IPv4 address, or an IPv6 prefix
+    /// ([`TrustStore::with_ipv6_prefix`], /64 by default).
     pub per_source: usize,
     /// Entries the whole directory may hold; past it nothing is recorded.
     pub total: usize,
@@ -357,10 +358,38 @@ impl TrustStore {
     /// all, 60 seconds).
     #[must_use]
     pub fn with_limits(mut self, limits: WaitingLimits) -> Self {
-        let prefix = self.queue().ipv6_prefix();
+        let (prefix, when_full, interval) = {
+            let queue = self.queue();
+            (
+                queue.ipv6_prefix(),
+                queue.when_full(),
+                queue.record_interval(),
+            )
+        };
         self.waiting = Arc::new(Mutex::new(
-            WaitingQueue::new(limits).with_ipv6_prefix(prefix),
+            WaitingQueue::new(limits)
+                .with_ipv6_prefix(prefix)
+                .with_when_full(when_full)
+                .with_record_interval(interval),
         ));
+        self
+    }
+
+    /// This store doing `when_full` with a newcomer to a full source; [`WhenFull::Refuse`] unless
+    /// set, so that strangers sharing a source cannot flush those already waiting.
+    #[must_use]
+    pub fn with_when_full(mut self, when_full: WhenFull) -> Self {
+        let queue = self.queue().clone().with_when_full(when_full);
+        self.waiting = Arc::new(Mutex::new(queue));
+        self
+    }
+
+    /// This store recording a new peer from one source at most once per `interval`, each record
+    /// being a synced write a stranger can cause; one second unless set, and zero is no limit.
+    #[must_use]
+    pub fn with_record_interval(mut self, interval: Duration) -> Self {
+        let queue = self.queue().clone().with_record_interval(interval);
+        self.waiting = Arc::new(Mutex::new(queue));
         self
     }
 
@@ -524,7 +553,9 @@ impl TrustStore {
     /// [pairing contract](TrustStore#pairing)).
     ///
     /// Bounded: invalid keys are ignored; one source holds at most
-    /// [`per_source`](WaitingLimits::per_source) entries (its oldest is replaced); the same
+    /// [`per_source`](WaitingLimits::per_source) entries, a newcomer being refused
+    /// ([`with_when_full`](TrustStore::with_when_full)); it records a new peer at most once per
+    /// [`with_record_interval`](TrustStore::with_record_interval); the same
     /// peer from the same source is recorded at most once per
     /// [`rerecord`](WaitingLimits::rerecord); the directory holds at most
     /// [`total`](WaitingLimits::total). A source is an IPv4 address (IPv4-mapped IPv6 included)

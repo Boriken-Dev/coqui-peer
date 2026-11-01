@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- A source at `WaitingLimits::per_source` now refuses a newcomer instead of replacing its oldest
+  entry, in `TrustStore::record_waiting` and `WaitingQueue::admit`: strangers sharing a source, as
+  everyone behind one reverse proxy does, could flush a peer waiting for an operator.
+  `Admission::evict` is empty unless the new `WhenFull::ReplaceOldest` is asked for through
+  `with_when_full`, which is the old behaviour.
+- One source records a new peer at most once per second, each record being a synced write. Set it with
+  `with_record_interval` on `TrustStore` and `WaitingQueue`; zero is the old behaviour.
+
 ## [0.0.0-alpha.1] - 2026-10-29
 
 ### Changed

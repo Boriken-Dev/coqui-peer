@@ -42,5 +42,5 @@ pub use store::{
     FORMAT_VERSION, Invitation, InvitationEntry, InvitationId, InvitationOptions, MAX_LABEL,
     Retiring, RotationEvent, RotationOptions, Successor, TrustStore, WaitingEntry, WaitingLimits,
 };
-pub use waiting::{Admission, WaitingQueue};
+pub use waiting::{Admission, DEFAULT_RECORD_INTERVAL, WaitingQueue, WhenFull};
 pub use weakening::Weakening;

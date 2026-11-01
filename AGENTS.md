@@ -76,6 +76,8 @@ impl TrustStore {
     pub fn open(state_dir: &Path) -> Result<TrustStore, Error>;        // creates <state_dir>/peers/{accepted,waiting}
     pub fn with_limits(self, limits: WaitingLimits) -> TrustStore;
     pub fn with_ipv6_prefix(self, bits: u8) -> TrustStore;            // default 64; above 128 is 128
+    pub fn with_when_full(self, when_full: WhenFull) -> TrustStore;   // default WhenFull::Refuse
+    pub fn with_record_interval(self, interval: Duration) -> TrustStore;  // default 1 s; zero is no limit
     pub fn with_clock(self, clock: Clock) -> TrustStore;              // default Clock::system()
     pub fn with_rotation(self, options: RotationOptions) -> TrustStore;
     pub fn rotation(&self) -> RotationOptions;   pub fn clock(&self) -> &Clock;
@@ -123,9 +125,11 @@ them unproven lets a stranger queue somebody else's identity. A failed proof rec
 
 Pairing: a server turns away an untrusted, key-proven peer and records it; the operator lists
 `waiting`, then `accept`s or `remove`s by id; the next handshake finds `is_accepted`.
-`record_waiting` is bounded: invalid keys ignored, at most `per_source` entries per source
-(the oldest of that source is replaced), the same peer from the same source at most every
-`rerecord`, `total` in all. A source is an IPv4 address (an IPv4-mapped IPv6 address counts as
+`record_waiting` is bounded: invalid keys ignored, at most `per_source` entries per source (a
+newcomer is refused, unless `WhenFull::ReplaceOldest`, which lets peers sharing a source flush each
+other), one new peer per source every `with_record_interval`, the same peer from the same source at
+most every `rerecord`, `total` in all. A flood can fill a source, so nobody new is recorded from it
+until an operator clears it; it cannot remove anyone. A source is an IPv4 address (an IPv4-mapped IPv6 address counts as
 its IPv4 address) or an IPv6 prefix of `with_ipv6_prefix` bits, /64 by default, since one
 holder controls every address of a /64; 128 counts each IPv6 address alone. The full address
 is still stored with the entry. `None` sources share one bucket. `is_accepted` and the `*_key`
@@ -139,6 +143,9 @@ pub struct WaitingQueue;   // Clone, Debug
 impl WaitingQueue {
     pub fn new(limits: WaitingLimits) -> WaitingQueue;          // IPv6 grouped by /64
     pub fn with_ipv6_prefix(self, bits: u8) -> WaitingQueue;    // above 128 is 128
+    pub fn with_when_full(self, when_full: WhenFull) -> WaitingQueue;      // default Refuse
+    pub fn with_record_interval(self, interval: Duration) -> WaitingQueue; // default DEFAULT_RECORD_INTERVAL
+    pub fn when_full(&self) -> WhenFull;  pub fn record_interval(&self) -> Duration;
     pub fn limits(&self) -> WaitingLimits;  pub fn ipv6_prefix(&self) -> u8;
     pub fn admit(&mut self, id: PeerId, source: Option<SocketAddr>, stored: usize, now: Instant) -> Admission;
     pub fn remember(&mut self, id: PeerId, source: Option<SocketAddr>, at: Instant) -> Vec<PeerId>;
@@ -147,12 +154,16 @@ impl WaitingQueue {
     pub fn len(&self) -> usize;  pub fn is_empty(&self) -> bool;
 }
 #[non_exhaustive] pub struct Admission { pub record: bool, pub evict: Vec<PeerId> }
+#[non_exhaustive] pub enum WhenFull { Refuse, ReplaceOldest }  // Copy, Default = Refuse
+pub const DEFAULT_RECORD_INTERVAL: Duration;                   // 1 s
 ```
 
 `admit` decides one peer: with `stored` (the host's count of waiting entries) at `total` or
 above, `record` is false and nothing is evicted (the newcomer waits); the same id from the same
-source within `rerecord` is not recorded again; otherwise `record` is true and `evict` lists
-that source's oldest entries past `per_source`, which the host removes. The host skips `admit`
+source within `rerecord` is not recorded again; a source that recorded anyone within
+`record_interval` records nobody new; a source at `per_source` refuses the newcomer, or under
+`WhenFull::ReplaceOldest` records it with `evict` listing that source's oldest entries, which the host
+removes. Otherwise `record` is true and `evict` is empty. The host skips `admit`
 for an id it already stores. `remember` seeds the queue from stored entries (placed by time;
 returns the ones past `per_source`), `forget` drops an id the host accepted or removed.
 `prune` forgets every entry `stored` says the host no longer holds once its `rerecord` time has
@@ -539,7 +550,7 @@ above it), `UnexpectedEof` (the stream ended inside a frame).
 - The `_until` drivers need `ReadTimeout` and `WriteTimeout` to bound a read or a write; a no-op
   implementation is bounded only between them. The async ones need a tokio runtime with its timer enabled.
 - `pair::Decision`, `Error`, `DriveError`, `pair::Mode`, `pair::Shown`, `pair::PairRefusal`,
-  `pair::PairingError`, `Digest` and `RotationEvent` are `#[non_exhaustive]`: a `match` needs a
+  `pair::PairingError`, `Digest`, `WhenFull` and `RotationEvent` are `#[non_exhaustive]`: a `match` needs a
   `_` arm.
 - On Windows a rename, link or removal that another handle blocks is retried for about a second
   before the store or `file` reports it.

@@ -13,7 +13,10 @@ use coqui_peer::{
 
 fn store() -> (tempfile::TempDir, TrustStore) {
     let directory = tempfile::tempdir().unwrap();
-    let store = TrustStore::open(directory.path()).unwrap();
+    // Most of these tests record in one instant: the rate limit has a test of its own.
+    let store = TrustStore::open(directory.path())
+        .unwrap()
+        .with_record_interval(Duration::ZERO);
     (directory, store)
 }
 
@@ -84,7 +87,7 @@ fn one_source_filling_its_cap_does_not_block_another() {
         total: 100,
         rerecord: Duration::from_secs(60),
     });
-    let noisy: Vec<KeyMaterial> = (0..3).map(|seed| key("example", seed)).collect();
+    let noisy: Vec<KeyMaterial> = (0..5).map(|seed| key("example", seed)).collect();
     for peer in &noisy {
         record(&store, peer, "192.0.2.1:1000");
     }
@@ -101,8 +104,58 @@ fn one_source_filling_its_cap_does_not_block_another() {
     };
     assert_eq!(from("192.0.2.1"), 2);
     assert_eq!(from("192.0.2.2"), 1);
-    assert!(waiting.iter().all(|entry| entry.id != noisy[0].id()));
+    // Those already waiting stay, and the newcomers are the ones refused.
+    assert!(waiting.iter().any(|entry| entry.id == noisy[0].id()));
+    assert!(waiting.iter().all(|entry| entry.id != noisy[4].id()));
     assert!(waiting.iter().any(|entry| entry.id == quiet.id()));
+}
+
+#[test]
+fn a_store_can_be_told_to_replace_the_oldest_of_a_full_source() {
+    let (_directory, store) = store();
+    let store = store
+        .with_limits(WaitingLimits {
+            per_source: 2,
+            total: 100,
+            rerecord: Duration::from_secs(60),
+        })
+        .with_when_full(coqui_peer::WhenFull::ReplaceOldest);
+    let noisy: Vec<KeyMaterial> = (0..3).map(|seed| key("example", seed)).collect();
+    for peer in &noisy {
+        record(&store, peer, "192.0.2.1:1000");
+    }
+    let waiting = store.waiting().unwrap();
+    assert_eq!(waiting.len(), 2);
+    assert!(waiting.iter().all(|entry| entry.id != noisy[0].id()));
+}
+
+#[test]
+fn a_store_records_one_new_peer_of_a_source_per_interval() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = TrustStore::open(directory.path()).unwrap();
+    for seed in 0..5 {
+        record(&store, &key("example", seed), "192.0.2.1:1000");
+    }
+    assert_eq!(store.waiting().unwrap().len(), 1);
+    record(&store, &key("example", 9), "192.0.2.2:1000");
+    assert_eq!(store.waiting().unwrap().len(), 2);
+}
+
+#[test]
+fn settings_survive_a_change_of_limits() {
+    let (_directory, store) = store();
+    let store = store
+        .with_when_full(coqui_peer::WhenFull::ReplaceOldest)
+        .with_limits(WaitingLimits {
+            per_source: 1,
+            total: 100,
+            rerecord: Duration::from_secs(60),
+        });
+    record(&store, &key("example", 0), "192.0.2.1:1000");
+    record(&store, &key("example", 1), "192.0.2.1:1000");
+    let waiting = store.waiting().unwrap();
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].id, key("example", 1).id());
 }
 
 #[test]

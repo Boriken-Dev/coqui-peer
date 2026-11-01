@@ -4,7 +4,7 @@ use core::net::SocketAddr;
 use core::time::Duration;
 use std::time::Instant;
 
-use coqui_peer::{PeerId, WaitingLimits, WaitingQueue};
+use coqui_peer::{PeerId, WaitingLimits, WaitingQueue, WhenFull};
 
 fn id(n: u8) -> PeerId {
     PeerId::of(&[n])
@@ -22,9 +22,63 @@ fn limits(per_source: usize, total: usize) -> WaitingLimits {
     }
 }
 
+/// A queue with no rate limit, as most of these tests record in one instant.
+fn unpaced(limits: WaitingLimits) -> WaitingQueue {
+    WaitingQueue::new(limits).with_record_interval(Duration::ZERO)
+}
+
+/// A queue that replaces, the behaviour some of these tests are about.
+fn replacing(limits: WaitingLimits) -> WaitingQueue {
+    unpaced(limits).with_when_full(WhenFull::ReplaceOldest)
+}
+
 #[test]
-fn a_source_past_its_share_gives_up_its_oldest_entries() {
-    let mut queue = WaitingQueue::new(limits(2, 100));
+fn a_full_source_refuses_a_newcomer_and_keeps_who_is_waiting() {
+    let mut queue = unpaced(limits(2, 100));
+    let now = Instant::now();
+    for n in 1..=2 {
+        let admitted = queue.admit(id(n), from("192.0.2.1:1"), 0, now);
+        assert!(admitted.record && admitted.evict.is_empty());
+    }
+    for n in 3..=20 {
+        let admitted = queue.admit(id(n), from("192.0.2.1:2"), 2, now);
+        assert!(!admitted.record && admitted.evict.is_empty());
+    }
+    assert!(queue.admit(id(3), from("192.0.2.2:1"), 2, now).record);
+    // Forgetting one, as when an operator acts, makes room.
+    queue.forget(&id(1));
+    assert!(queue.admit(id(4), from("192.0.2.1:1"), 2, now).record);
+}
+
+#[test]
+fn a_source_records_one_new_peer_per_interval() {
+    let mut queue = WaitingQueue::new(limits(16, 100));
+    assert_eq!(queue.record_interval(), coqui_peer::DEFAULT_RECORD_INTERVAL);
+    let now = Instant::now();
+    assert!(queue.admit(id(1), from("192.0.2.1:1"), 0, now).record);
+    assert!(!queue.admit(id(2), from("192.0.2.1:1"), 1, now).record);
+    assert!(
+        !queue
+            .admit(
+                id(2),
+                from("192.0.2.1:1"),
+                1,
+                now + Duration::from_millis(999)
+            )
+            .record
+    );
+    // Another source is not held back.
+    assert!(queue.admit(id(3), from("192.0.2.2:1"), 1, now).record);
+    assert!(
+        queue
+            .admit(id(2), from("192.0.2.1:1"), 2, now + Duration::from_secs(1))
+            .record
+    );
+}
+
+#[test]
+fn a_source_past_its_share_gives_up_its_oldest_entries_when_asked_to() {
+    let mut queue = replacing(limits(2, 100));
     let now = Instant::now();
     for n in 1..=2 {
         let admitted = queue.admit(id(n), from("192.0.2.1:1"), 0, now);
@@ -51,7 +105,7 @@ fn a_full_queue_records_nothing_and_drops_nothing() {
 
 #[test]
 fn the_same_peer_from_the_same_source_waits_out_the_rerecord_time() {
-    let mut queue = WaitingQueue::new(limits(16, 100));
+    let mut queue = unpaced(limits(16, 100));
     let now = Instant::now();
     assert!(queue.admit(id(1), from("192.0.2.1:1"), 0, now).record);
     assert!(
@@ -72,7 +126,7 @@ fn the_same_peer_from_the_same_source_waits_out_the_rerecord_time() {
 #[test]
 fn ipv6_sources_count_by_prefix_and_mapped_ipv4_by_address() {
     let now = Instant::now();
-    let mut queue = WaitingQueue::new(limits(1, 100));
+    let mut queue = replacing(limits(1, 100));
     assert_eq!(queue.ipv6_prefix(), 64);
     assert!(queue.admit(id(1), from("[2001:db8::1]:1"), 0, now).record);
     // Another address in the same /64 is the same source.
@@ -93,7 +147,7 @@ fn ipv6_sources_count_by_prefix_and_mapped_ipv4_by_address() {
         [id(3)]
     );
     // Grouped by /128, each IPv6 address is a source of its own.
-    let mut exact = WaitingQueue::new(limits(1, 100)).with_ipv6_prefix(200);
+    let mut exact = replacing(limits(1, 100)).with_ipv6_prefix(200);
     assert_eq!(exact.ipv6_prefix(), 128);
     assert!(exact.admit(id(1), from("[2001:db8::1]:1"), 0, now).record);
     assert!(
@@ -106,7 +160,7 @@ fn ipv6_sources_count_by_prefix_and_mapped_ipv4_by_address() {
 
 #[test]
 fn peers_with_no_address_share_one_source() {
-    let mut queue = WaitingQueue::new(limits(1, 100));
+    let mut queue = replacing(limits(1, 100));
     let now = Instant::now();
     assert!(queue.admit(id(1), None, 0, now).record);
     assert_eq!(queue.admit(id(2), None, 1, now).evict, [id(1)]);
@@ -114,7 +168,7 @@ fn peers_with_no_address_share_one_source() {
 
 #[test]
 fn a_queue_seeded_from_stored_entries_applies_the_same_bounds() {
-    let mut queue = WaitingQueue::new(limits(2, 100));
+    let mut queue = replacing(limits(2, 100));
     let now = Instant::now();
     assert!(queue.remember(id(1), from("192.0.2.1:1"), now).is_empty());
     assert!(
