@@ -696,6 +696,28 @@ mod pin {
     }
 
     #[test]
+    fn a_responder_with_no_operator_refuses_a_joiner_showing_its_own_pin() {
+        let world = fresh();
+        let desk = world
+            .desk
+            .clone()
+            .with_options(PairingOptions {
+                pin_shown: false,
+                ..PairingOptions::default()
+            })
+            .unwrap();
+        let pin = Pin::generate(&CodeAlphabet::pin(), &counting(40)).unwrap();
+        let joiner = Pairing::pin(pin, PinRole::Shown)
+            .join(proven(&key(1), &key(2), b""))
+            .unwrap();
+        let responder =
+            PairingResponder::new(proven(&key(2), &key(1), b""), &world.store, &desk, None);
+        let ran = run(joiner, responder, &desk, |_| {}, untouched);
+        assert_eq!(refused(&ran.joiner), Some(PairRefusal::Disabled));
+        assert!(desk.slots().is_empty(), "no run waits for an operator");
+    }
+
+    #[test]
     fn a_joiner_shows_its_pin_with_a_slot() {
         let world = fresh();
         let pin = Pin::generate(&CodeAlphabet::pin(), &counting(40)).unwrap();

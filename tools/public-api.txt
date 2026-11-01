@@ -142,6 +142,7 @@ pub coqui_peer::pair::PairingOptions::invitation: bool
 pub coqui_peer::pair::PairingOptions::pin: bool
 pub coqui_peer::pair::PairingOptions::pin_alphabet: coqui_peer::pair::CodeAlphabet
 pub coqui_peer::pair::PairingOptions::pin_attempts: u32
+pub coqui_peer::pair::PairingOptions::pin_shown: bool
 pub coqui_peer::pair::PairingOptions::pin_ttl: core::time::Duration
 pub coqui_peer::pair::PairingOptions::user_code_alphabet: coqui_peer::pair::CodeAlphabet
 impl coqui_peer::pair::PairingOptions

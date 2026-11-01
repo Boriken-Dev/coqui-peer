@@ -913,6 +913,7 @@ impl PairingResponder {
         let options = self.desk.options();
         let (kind, enabled) = match mode {
             MODE_INVITATION => (Mode::Invitation, options.invitation),
+            MODE_PIN_SHOWN if !options.pin_shown => (Mode::Pin, false),
             MODE_PIN_TYPED | MODE_PIN_SHOWN => (Mode::Pin, options.pin && cfg!(feature = "pin")),
             MODE_DEVICE => (Mode::Device, options.device),
             _ => return Err(PairingError::Protocol),

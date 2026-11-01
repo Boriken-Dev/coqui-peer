@@ -30,6 +30,10 @@ pub struct PairingOptions {
     pub invitation: bool,
     /// Whether joiners may pair with a PIN (needs the `pin` feature). Default `true`.
     pub pin: bool,
+    /// Whether a joiner may show a PIN for an operator to type into this side, which holds its
+    /// run until the operator answers or `pin_ttl` passes. Turn it off where nobody is there
+    /// to answer. Default `true`.
+    pub pin_shown: bool,
     /// Whether joiners may pair by the device flow. Default `true`.
     pub device: bool,
     /// The alphabet and length of a PIN the desk shows. Default `0123456789` × 6.
@@ -53,6 +57,7 @@ impl Default for PairingOptions {
         Self {
             invitation: true,
             pin: true,
+            pin_shown: true,
             device: true,
             pin_alphabet: CodeAlphabet::pin(),
             pin_ttl: Duration::from_secs(600),

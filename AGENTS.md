@@ -355,7 +355,7 @@ impl PairingDesk {
     pub fn wait(&self, Ticket) -> Decision;      // blocking
     pub fn decided(&self, Ticket) -> Decided;    // Future<Output = Decision>
 }
-pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub device: bool,
+pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub pin_shown: bool, pub device: bool,
     pub pin_alphabet: CodeAlphabet, pub pin_ttl: Duration, pub pin_attempts: u32,
     pub user_code_alphabet: CodeAlphabet, pub device_ttl: Duration }   // Default: all on, 10 min, 1, 10 min
 pub struct DeskLimits { pub pending: usize, pub pending_per_source: usize, pub pin_runs_per_source: usize,

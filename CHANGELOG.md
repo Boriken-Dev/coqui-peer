@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `PairingOptions::pin_shown` refuses a joiner who asks to show its own PIN, for a responder with no operator to answer one; such a run would otherwise wait for `pin_ttl`.
+
 ### Changed
 
 - A source at `WaitingLimits::per_source` now refuses a newcomer instead of replacing its oldest
