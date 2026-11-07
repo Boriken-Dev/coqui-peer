@@ -20,6 +20,7 @@ pub mod file;
 mod id;
 mod key;
 mod method;
+mod non_default;
 pub mod pair;
 pub mod pem;
 mod random;
@@ -27,7 +28,6 @@ mod store;
 #[cfg(feature = "coqui-transport")]
 pub mod transport;
 mod waiting;
-mod weakening;
 
 pub use clock::Clock;
 pub use drive::{
@@ -39,10 +39,12 @@ pub use error::Error;
 pub use id::{Digest, PeerId};
 pub use key::{KeyMaterial, MAX_KEY_BYTES};
 pub use method::{Established, Framing, Handshake, Method};
+pub use non_default::NonDefault;
+#[allow(deprecated)]
+pub use non_default::Weakening;
 pub use random::Random;
 pub use store::{
     FORMAT_VERSION, Invitation, InvitationEntry, InvitationId, InvitationOptions, MAX_LABEL,
     Retiring, RotationEvent, RotationOptions, Successor, TrustStore, WaitingEntry, WaitingLimits,
 };
 pub use waiting::{Admission, DEFAULT_RECORD_INTERVAL, WaitingQueue, WhenFull};
-pub use weakening::Weakening;

@@ -12,18 +12,18 @@ use std::time::SystemTime;
 use crate::clock::{Clock, later};
 use crate::error::Error;
 use crate::id::PeerId;
+use crate::non_default::NonDefault;
 use crate::pair::code::{CodeAlphabet, PairingCode, Pin, UserCode, below, same};
 use crate::pair::{PairRefusal, PairingError};
 use crate::random::Random;
 use crate::store::{DEFAULT_IPV6_PREFIX, source_key};
-use crate::weakening::Weakening;
 
 /// Draws of a user code that is not already pending before the desk gives up.
 const ISSUE_DRAWS: usize = 64;
 
 /// What a responder offers and how its codes are made. Every field has a default; any value
-/// with a meaning is accepted, and [`weakened`](PairingOptions::weakened) lists the ones that
-/// are weaker than their default.
+/// with a meaning is accepted, and [`non_defaults`](PairingOptions::non_defaults) lists the ones that
+/// are looser than their default.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingOptions {
     /// Whether joiners may pair with an invitation. Default `true`.
@@ -69,7 +69,7 @@ impl Default for PairingOptions {
 }
 
 /// Bounds on a desk's pending work and on guessing. Every field has a default; any value is
-/// accepted, and [`weakened`](DeskLimits::weakened) lists the ones looser than their default.
+/// accepted, and [`non_defaults`](DeskLimits::non_defaults) lists the ones looser than their default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeskLimits {
     /// Pairing exchanges in progress at once. Default 32.
@@ -107,8 +107,8 @@ impl Default for DeskLimits {
     }
 }
 
-fn note(found: &mut Vec<Weakening>, setting: &str, value: String, strict: String) {
-    found.push(Weakening::new(setting, value, strict));
+fn note(found: &mut Vec<NonDefault>, setting: &str, value: String, default: String) {
+    found.push(NonDefault::new(setting, value, default));
 }
 
 impl PairingOptions {
@@ -126,9 +126,9 @@ impl PairingOptions {
         Ok(())
     }
 
-    /// The options weaker than their default: fewer code combinations, more attempts per PIN,
-    /// longer lifetimes. Turning a mode off weakens nothing.
-    pub fn weakened(&self) -> Vec<Weakening> {
+    /// The options looser than their default: fewer code combinations, more attempts per PIN,
+    /// longer lifetimes. Turning a mode off lists nothing.
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
         let default = Self::default();
         let mut found = Vec::new();
         if self.pin_alphabet.combinations() < default.pin_alphabet.combinations() {
@@ -173,11 +173,17 @@ impl PairingOptions {
         }
         found
     }
+
+    /// The old name of [`non_defaults`](PairingOptions::non_defaults).
+    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    pub fn weakened(&self) -> Vec<NonDefault> {
+        self.non_defaults()
+    }
 }
 
 impl DeskLimits {
     /// The limits looser than their default.
-    pub fn weakened(&self) -> Vec<Weakening> {
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
         let default = Self::default();
         let mut found = Vec::new();
         for (setting, value, standard) in [
@@ -224,6 +230,12 @@ impl DeskLimits {
             );
         }
         found
+    }
+
+    /// The old name of [`non_defaults`](DeskLimits::non_defaults).
+    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    pub fn weakened(&self) -> Vec<NonDefault> {
+        self.non_defaults()
     }
 }
 

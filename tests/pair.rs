@@ -480,9 +480,9 @@ fn pending_exchanges_are_bounded() {
 // Options and messages.
 
 #[test]
-fn weaker_options_are_reported_not_refused() {
-    assert!(PairingOptions::default().weakened().is_empty());
-    assert!(DeskLimits::default().weakened().is_empty());
+fn non_default_options_are_reported_not_refused() {
+    assert!(PairingOptions::default().non_defaults().is_empty());
+    assert!(DeskLimits::default().non_defaults().is_empty());
     let options = PairingOptions {
         pin_alphabet: CodeAlphabet {
             chars: "0123456789".to_owned(),
@@ -495,16 +495,20 @@ fn weaker_options_are_reported_not_refused() {
         .with_options(options.clone())
         .unwrap();
     assert_eq!(desk.options().pin_attempts, 3);
-    let weakened: Vec<String> = options.weakened().into_iter().map(|w| w.setting).collect();
-    assert_eq!(weakened, ["pin_alphabet", "pin_attempts"]);
-    // The one Weakening type of the crate root, with the strict value beside the current one.
+    let listed: Vec<String> = options
+        .non_defaults()
+        .into_iter()
+        .map(|w| w.setting)
+        .collect();
+    assert_eq!(listed, ["pin_alphabet", "pin_attempts"]);
+    // The one NonDefault type of the crate root, with the default value beside the current one.
     let attempts = options
-        .weakened()
+        .non_defaults()
         .into_iter()
         .find(|w| w.setting == "pin_attempts");
     assert_eq!(
         attempts,
-        Some(coqui_peer::Weakening::new("pin_attempts", "3", "1"))
+        Some(coqui_peer::NonDefault::new("pin_attempts", "3", "1"))
     );
     let meaningless = PairingOptions {
         pin_attempts: 0,
@@ -1207,4 +1211,21 @@ fn debug_output_shows_no_binding_secret_or_pin() {
         .invite(&counting(171), InvitationOptions::default(), "")
         .unwrap();
     assert!(!format!("{invitation:?}").contains("171"));
+}
+
+#[test]
+#[allow(deprecated)]
+fn the_old_names_answer_the_new_ones() {
+    let options = PairingOptions {
+        pin_attempts: 3,
+        ..PairingOptions::default()
+    };
+    assert_eq!(options.weakened(), options.non_defaults());
+    let limits = DeskLimits {
+        pending: 64,
+        ..DeskLimits::default()
+    };
+    assert_eq!(limits.weakened(), limits.non_defaults());
+    let old: coqui_peer::Weakening = coqui_peer::Weakening::new("pin_attempts", "3", "1");
+    assert_eq!(old.default, "1");
 }
