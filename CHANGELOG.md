@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Breaking: a weakened setting is a non-default setting.** `Weakening { setting, value, strict }` is now
+  `NonDefault { setting, value, default }`, and `PairingOptions::weakened` and `DeskLimits::weakened` are
+  `non_defaults`. `Weakening` (now an alias of `NonDefault`, so a struct literal naming `strict` no longer
+  compiles) and the two `weakened` methods stay one release as deprecated aliases. A library lists
+  settings and logs them at `debug` at most; the application that knows the use case decides what they mean.
 - A source at `WaitingLimits::per_source` now refuses a newcomer instead of replacing its oldest
   entry, in `TrustStore::record_waiting` and `WaitingQueue::admit`: strangers sharing a source, as
   everyone behind one reverse proxy does, could flush a peer waiting for an operator.

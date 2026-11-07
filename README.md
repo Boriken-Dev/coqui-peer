@@ -89,7 +89,7 @@ let channel = established.session;          // what the method produced
 
 | Module | Purpose |
 | --- | --- |
-| `coqui_peer` | `PeerId`, `Digest`; `TrustStore`, `WaitingQueue`, invitations and rotation; `KeyMaterial`; `Clock`, `Random`, `Weakening`; the `Handshake` and `Method` traits, the drivers and the frame functions; `Error`. |
+| `coqui_peer` | `PeerId`, `Digest`; `TrustStore`, `WaitingQueue`, invitations and rotation; `KeyMaterial`; `Clock`, `Random`, `NonDefault`; the `Handshake` and `Method` traits, the drivers and the frame functions; `Error`. |
 | `coqui_peer::pair` | Pairing by invitation, PIN or device flow: `Pairing`, `PairingJoiner`, `PairingResponder`, `PairingDesk` and their options. |
 | `coqui_peer::asynch` | The drivers and frame functions over tokio streams and async message transports (`tokio`). |
 | `coqui_peer::file` | Atomic writes: `write_new` never replaces, `replace` does; owner-only on request. |

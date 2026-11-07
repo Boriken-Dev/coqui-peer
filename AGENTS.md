@@ -17,7 +17,7 @@ MSRV Rust 1.89. A default build depends on `data-encoding`, `sha1`, `sha2`, `sub
 1.0.
 
 Imports: the crate root holds the ids, the store and its queue, `KeyMaterial`, `Clock`,
-`Random`, `Weakening`, the `Handshake`/`Method` traits, the blocking drivers and frame functions,
+`Random`, `NonDefault`, the `Handshake`/`Method` traits, the blocking drivers and frame functions,
 and `Error`. Public modules: `pair` (pairing), `asynch` (feature `tokio`), `file` and `pem`.
 
 No `unsafe` code (`#![forbid(unsafe_code)]`). Process-wide state: one counter that keeps
@@ -384,9 +384,10 @@ pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub pin_shown: 
 pub struct DeskLimits { pub pending: usize, pub pending_per_source: usize, pub pin_runs_per_source: usize,
     pub wrong_codes_per_approver: usize, pub approver_window: Duration, pub wrong_codes_total: usize,
     pub ipv6_prefix: u8 }                       // Default: 32, 4, 8, 5, 60 s, 60, 64
-impl PairingOptions { pub fn check(&self) -> Result<(), Error>; pub fn weakened(&self) -> Vec<Weakening>; }
-impl DeskLimits { pub fn weakened(&self) -> Vec<Weakening>; }
-// Weakening is the crate root's: coqui_peer::Weakening { setting, value, strict }, Weakening::new(setting, value, strict)
+impl PairingOptions { pub fn check(&self) -> Result<(), Error>; pub fn non_defaults(&self) -> Vec<NonDefault>; }
+impl DeskLimits { pub fn non_defaults(&self) -> Vec<NonDefault>; }
+// NonDefault is the crate root's: coqui_peer::NonDefault { setting, value, default }, NonDefault::new(setting, value, default)
+// Deprecated for one release: Weakening (an alias of NonDefault; its field `strict` is now `default`) and the `weakened()` methods.
 pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
 pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
 pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }
@@ -460,8 +461,8 @@ dashes or spaces; anything else is `Error::InvalidCode`. Normalising typed input
 for display are the caller's. `find_device` compares against every pending code in constant
 time.
 
-**Options cost what they weaken.** Nothing is refused for being weak; `weakened()` lists what is
-weaker than the default, and these are the costs:
+**Options cost what they loosen.** Nothing is refused for being non-default; `non_defaults()` lists what is
+looser than the default, and these are the costs:
 
 - fewer `combinations()` of `pin_alphabet`: an attacker's one guess per run succeeds with
   probability `pin_attempts / combinations` per shown PIN; 10^4 codes is 1 in 10 000;

@@ -37,8 +37,8 @@ A responder turns off the modes it does not offer (`PairingOptions`).
 
 ## Options and what they cost
 
-Every number is an option with a default, and none is refused for being weak.
-`PairingOptions::weakened()` and `DeskLimits::weakened()` list what is weaker than the default
+Every number is an option with a default, and none is refused for differing from its default.
+`PairingOptions::non_defaults()` and `DeskLimits::non_defaults()` list what is looser than the default
 so your app can show it. Fewer code combinations or more attempts per PIN raise an attacker's
 odds per PIN in proportion; longer lifetimes keep a code guessable or approvable longer; larger
 caps allow more attempts per window. Codes are matched exactly over their alphabet: normalising
