@@ -26,6 +26,8 @@ tokio = ["dep:tokio"]
 # PIN pairing: SPAKE2 with key confirmation (spake2, hkdf, hmac), and `Random::os` (rand_core,
 # which spake2 already uses, reading the operating system's generator).
 pin = ["dep:spake2", "dep:hkdf", "dep:hmac", "dep:rand_core"]
+# `transport`: `PeerFrame` as a coqui-transport codec, and a coqui-transport channel as a `MessageTransport`.
+coqui-transport = ["dep:coqui-transport"]
 
 [dependencies]
 # Hex, base32 and the base64 of PEM.
@@ -47,6 +49,9 @@ hkdf = { version = "0.13", default-features = false, optional = true }
 hmac = { version = "0.13", default-features = false, optional = true }
 # `Random::os`, behind `pin`; the version spake2 uses. Pre-1.0: rand_core's 0.6 line.
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"], optional = true }
+
+# The channel contract and framing, behind `coqui-transport`. It never depends on this crate.
+coqui-transport = { git = "https://github.com/Boriken-Dev/coqui-transport", rev = "82563e2282149e543b95cc1dd00fbafc3bfcdf52", optional = true }
 
 [dev-dependencies]
 # Temporary store directories.

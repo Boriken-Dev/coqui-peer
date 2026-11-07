@@ -24,6 +24,8 @@ pub mod pair;
 pub mod pem;
 mod random;
 mod store;
+#[cfg(feature = "coqui-transport")]
+pub mod transport;
 mod waiting;
 mod weakening;
 

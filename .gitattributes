@@ -1,1 +1,4 @@
 * text=auto eol=lf
+
+# The vectors are byte-exact.
+/tests/vectors/peer_frame.json -text
