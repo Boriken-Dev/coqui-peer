@@ -95,6 +95,8 @@ jobs:
             flags: "--no-default-features --features serde"
           - name: "tokio"
             flags: "--no-default-features --features tokio"
+          - name: "coqui-transport"
+            flags: "--no-default-features --features coqui-transport"
     steps:
       - uses: actions/checkout@v4
         with:

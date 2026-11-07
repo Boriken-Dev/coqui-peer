@@ -49,6 +49,7 @@ cargo add coqui-peer@0.0.0-alpha.1
 | `serde` | `serde` | reading and writing `PeerId` and `Digest` as text, in the format you choose | off |
 | `tokio` | `tokio` (`io-util`, `time`) | the `asynch` drivers and frame functions | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` | PIN pairing (`Pairing::pin`), `Random::os` | off |
+| `coqui-transport` | `coqui-transport` | module `transport`: `PeerFrame`, and a `coqui-transport` channel as a `MessageTransport` | off |
 
 Rust 1.89 or later. A default build depends on `data-encoding`, `sha1`, `sha2`, `subtle` and
 `zeroize`.

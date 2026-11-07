@@ -10,6 +10,7 @@ package and is self-contained. Development documentation lives with the source a
 | `serde` | `serde`: `Serialize`/`Deserialize` for `PeerId` and `Digest` as their text | text formats the consumer picks | off |
 | `tokio` | `tokio` (`io-util`, `time`): module `asynch` | async drivers and frame functions | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`) | PIN pairing (`Pairing::pin`), `Random::os` | off |
+| `coqui-transport` | `coqui-transport`: module `transport` | `PeerFrame`, and a `coqui_transport::Channel` as a `MessageTransport` | off |
 
 MSRV Rust 1.89. A default build depends on `data-encoding`, `sha1`, `sha2`, `subtle` and
 `zeroize`. Version `0.0.0-alpha.1` is a pre-release; the API may change in any release before
@@ -282,6 +283,28 @@ the message, at most `MAX_MESSAGE`. `write_frame` refuses a longer message with
 The reader's buffer grows as bytes arrive, so a declared length costs nothing until it is
 sent. The drivers use them for `Framing::Message` over a stream and report a frame above the
 limit as `DriveError::TooLong`.
+
+**Over `coqui-transport` (feature `coqui-transport`, module `coqui_peer::transport`).**
+
+```rust
+pub struct PeerFrame;   // Clone, Copy, Debug, Default, Eq, Hash; Codec of coqui_transport::frame, Decoder = LengthDecoder
+impl PeerFrame { pub const fn prefix() -> LengthPrefix; }   // LengthPrefix::u32_be(): empty messages allowed
+pub struct ChannelTransport<C: Channel>;    // Debug
+impl<C: Channel> ChannelTransport<C> { pub const fn new(C) -> Self; pub const fn channel(&self) -> &C; pub fn into_inner(self) -> C; }
+impl<C: Channel> MessageTransport for ChannelTransport<C>;   // also for C = Box<dyn Channel>
+impl<C> ReadTimeout for ChannelTransport<C>;  impl<C> WriteTimeout for ChannelTransport<C>;
+```
+
+`PeerFrame` writes and reads the bytes of `write_frame` and `read_frame` (the vectors in
+`tests/vectors/peer_frame.json` hold all three to the same cases), so a `StreamChannel` on it and
+`drive_stream` over a socket talk to each other. The message bound is the channel's, not
+`MAX_MESSAGE`. `ChannelTransport` drives a handshake over any channel: `send` is `send_timeout`
+and `recv` is `receive`, each bounded by the timeout the `_until` drivers set (none otherwise); a
+message over `MAX_MESSAGE` either way, or a `Failure::Protocol`, is `InvalidInput` going out and
+`InvalidData` coming in (`DriveError::Io`, as for any message transport); an orderly end is `UnexpectedEof`; `Timeout` and `NoProgress` are `TimedOut`, `PathLost`
+`ConnectionReset`, the certificate, proof and permission failures `PermissionDenied`, and the
+`Failure` is the error's source. The channel is not an authenticated peer: the handshake proves
+it. `coqui-transport` never depends on `coqui-peer`.
 
 The handshake does no I/O; the caller owns the transport. `Stream` handshakes treat input as
 bytes (chunks may split or join); `Message` handshakes get exactly one message per `receive`.
