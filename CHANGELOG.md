@@ -9,12 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Feature `guatiao`: `NonDefault::from_difference` makes a `NonDefault` from guatiao's `Difference` (key path, text or compact JSON values). `Digest` (as its lowercase name) and `WaitingLimits` derive guatiao's `ToValue`, `FromValue` and `Schema`, so a configuration type that holds them derives its own.
+- **Builders and settings.** `TrustStore::builder(dir)` (`limits`, `ipv6_prefix`, `when_full`, `record_interval`, `rotation`, `clock`, `settings`, then `build()`), `WaitingQueue::builder(limits)` and `PairingDesk::builder(random)` (`options`, `limits`, `clock`, `settings`, then `build()`) set a thing up by the setting's name; `TrustStore::open`, `WaitingQueue::new` and `PairingDesk::new` stay as the defaults. `TrustStoreSettings`, `WaitingSettings` and `pair::PairingDeskSettings` hold what a builder takes whole, and `settings()` on the built thing returns them. `Pairing::random` sets the PAKE's random source.
+- guatiao is a dependency in every build (the `guatiao` feature is gone, it was never released): `Digest` (its lowercase name), `WhenFull` (`refuse`, `replace-oldest`), `WaitingLimits`, `WaitingSettings`, `RotationOptions`, `TrustStoreSettings`, `pair::{CodeAlphabet, PairingOptions, DeskLimits, PairingDeskSettings}` derive guatiao's `ToValue`, `FromValue` and `Schema`; unknown keys are refused and an absent key is its default. `NonDefault::from_difference` renders a guatiao `Difference`; `NonDefault::of_settings` and `of_settings_against` list the keys of a settings value that differ from its schema's defaults or from another value, named by key path.
 - Feature `coqui-transport` (off by default; it changes nothing else): module `transport` with `PeerFrame`, `write_frame`'s and `read_frame`'s wire as a `coqui_transport::frame` codec (`LengthPrefix::u32_be()`, empty messages allowed), held to the same vectors as the frame functions, and `ChannelTransport`, which drives a handshake over any `coqui_transport::Channel` as a `MessageTransport`, with the read and write timeouts the `_until` drivers set.
 - `PairingOptions::pin_shown` refuses a joiner who asks to show its own PIN, for a responder with no operator to answer one; such a run would otherwise wait for `pin_ttl`.
 
 ### Changed
 
+- **Breaking:** the `with_` setters are named for their setting and live on builders. `TrustStore::with_limits`, `with_ipv6_prefix`, `with_clock` and `with_rotation`, `WaitingQueue::with_ipv6_prefix`, `PairingDesk::with_options`, `with_limits` and `with_clock` and `Pairing::with_random` stay one release as `#[deprecated]` wrappers; `with_when_full` and `with_record_interval` were never released and are gone, as the builders' `when_full` and `record_interval`.
+- **Breaking:** `WaitingLimits`, `RotationOptions`, `InvitationOptions`, `pair::{PairingOptions, DeskLimits, CodeAlphabet}`, `Paired`, `ShownPin`, `PendingSlot`, `PendingDevice`, `WaitingEntry`, `InvitationEntry`, `Invitation`, `Successor` and `Retiring` are `#[non_exhaustive]`: start from `Default` and assign the fields (`CodeAlphabet::new(chars, len)`).
+- **Breaking:** `PairingOptions::non_defaults` and `DeskLimits::non_defaults` list every option that differs from its default, not only the looser ones, and name it by key path (`pin_alphabet.len`, was `pin_alphabet`, whose value was the number of combinations).
 - **Breaking: a weakened setting is a non-default setting.** `Weakening { setting, value, strict }` is now
   `NonDefault { setting, value, default }`, and `PairingOptions::weakened` and `DeskLimits::weakened` are
   `non_defaults`. `Weakening` (now an alias of `NonDefault`, so a struct literal naming `strict` no longer
@@ -24,9 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   entry, in `TrustStore::record_waiting` and `WaitingQueue::admit`: strangers sharing a source, as
   everyone behind one reverse proxy does, could flush a peer waiting for an operator.
   `Admission::evict` is empty unless the new `WhenFull::ReplaceOldest` is asked for through
-  `with_when_full`, which is the old behaviour.
+  `WhenFull::ReplaceOldest` through the builder's `when_full`, which is the old behaviour.
 - One source records a new peer at most once per second, each record being a synced write. Set it with
-  `with_record_interval` on `TrustStore` and `WaitingQueue`; zero is the old behaviour.
+  `record_interval` on the `TrustStore` and `WaitingQueue` builders; zero is the old behaviour.
 
 ## [0.0.0-alpha.1] - 2026-10-29
 

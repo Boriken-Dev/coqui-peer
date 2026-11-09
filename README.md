@@ -47,12 +47,11 @@ cargo add coqui-peer@0.0.0-alpha.1
 | Feature | Adds | Needed for | Default |
 | --- | --- | --- | --- |
 | `serde` | `serde` | reading and writing `PeerId` and `Digest` as text, in the format you choose | off |
-| `guatiao` | `guatiao` (`derive`), `guatiao-serde` | `Digest` and `WaitingLimits` as guatiao values with a schema, `NonDefault::from_difference` | off |
 | `tokio` | `tokio` (`io-util`, `time`) | the `asynch` drivers and frame functions | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` | PIN pairing (`Pairing::pin`), `Random::os` | off |
 | `coqui-transport` | `coqui-transport` | module `transport`: `PeerFrame`, and a `coqui-transport` channel as a `MessageTransport` | off |
 
-Rust 1.89 or later. A default build depends on `data-encoding`, `sha1`, `sha2`, `subtle` and
+Rust 1.89 or later. A default build depends on `data-encoding`, `guatiao`, `guatiao-serde`, `sha1`, `sha2`, `subtle` and
 `zeroize`.
 
 ## Quick start
@@ -76,6 +75,31 @@ let pinned: PeerId =
 assert_eq!(pinned, key.id());
 # Ok::<(), Box<dyn std::error::Error>>(())
 ```
+
+Settings go in a builder, by name, and a settings type fills them whole from a file:
+
+```rust,no_run
+use std::time::Duration;
+use coqui_peer::{TrustStore, TrustStoreSettings, WaitingLimits, WhenFull};
+
+let mut limits = WaitingLimits::default();
+limits.per_source = 4;
+let store = TrustStore::builder(std::path::Path::new("/var/lib/app"))
+    .limits(limits)
+    .when_full(WhenFull::ReplaceOldest)
+    .record_interval(Duration::from_millis(500))
+    .build()?;
+// What differs from the defaults, named by key path, for the application to show.
+for setting in store.non_defaults() {
+    println!("{} = {} (default {})", setting.setting, setting.value, setting.default);
+}
+# let _ = TrustStoreSettings::default();
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+`TrustStoreSettings`, `WaitingSettings`, `pair::PairingDeskSettings` and the option types they hold are
+guatiao values: `guatiao_serde::text::toml` (or json, yaml) reads them, an absent key is its default and an
+unknown key is refused. `builder(..).settings(s)` takes one whole.
 
 Running a method's handshake over a stream, with a deadline:
 

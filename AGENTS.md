@@ -8,13 +8,14 @@ package and is self-contained. Development documentation lives with the source a
 | Feature | Adds | Needed for | Default |
 | --- | --- | --- | --- |
 | `serde` | `serde`: `Serialize`/`Deserialize` for `PeerId` and `Digest` as their text | text formats the consumer picks | off |
-| `guatiao` | `guatiao` (`derive`), `guatiao-serde` (`json`): `NonDefault::from_difference` (a guatiao `Difference` as a `NonDefault`: `setting` is its key path, a text value its text, any other value compact JSON, a missing side `unset`); `ToValue`, `FromValue`, `Schema` for `Digest` (its lowercase name) and `WaitingLimits` (every key optional, unknown keys refused; `rerecord` reads a number of seconds, `[secs, nanos]` or `{secs, nanos}`) | configuration read through `guatiao-serde` | off |
 | `tokio` | `tokio` (`io-util`, `time`): module `asynch` | async drivers and frame functions | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`) | PIN pairing (`Pairing::pin`), `Random::os` | off |
 | `coqui-transport` | `coqui-transport`: module `transport` | `PeerFrame`, and a `coqui_transport::Channel` as a `MessageTransport` | off |
 
-MSRV Rust 1.89. A default build depends on `data-encoding`, `sha1`, `sha2`, `subtle` and
-`zeroize`. Version `0.0.0-alpha.1` is a pre-release; the API may change in any release before
+MSRV Rust 1.89. A default build depends on `data-encoding`, `guatiao` (`derive`), `guatiao-serde` (`json`),
+`sha1`, `sha2`, `subtle` and `zeroize`. The settings types below are guatiao values in every build: every
+key is optional (an absent one is its default), an unknown key is refused, and `guatiao_serde::text`
+(toml, json, yaml) reads and writes them; a duration reads as seconds, `[secs, nanos]` or `{secs, nanos}`. Version `0.0.0-alpha.1` is a pre-release; the API may change in any release before
 1.0.
 
 Imports: the crate root holds the ids, the store and its queue, `KeyMaterial`, `Clock`,
@@ -71,18 +72,21 @@ pub const MAX_KEY_BYTES: usize = 65536;
 
 ```rust
 pub struct TrustStore;                     // Clone
-pub struct WaitingLimits { pub per_source: usize, pub total: usize, pub rerecord: Duration }   // Default: 16, 1000, 60 s
-pub struct WaitingEntry { pub id: PeerId, pub source: Option<SocketAddr> }
+// Builds the store: limits(WaitingLimits), ipv6_prefix(u8), when_full(WhenFull), record_interval(Duration),
+// rotation(RotationOptions), clock(Clock), settings(TrustStoreSettings) (replaces all but the clock), build()
+// -> Result<TrustStore, Error>. The last setter wins.
+pub struct TrustStoreBuilder;
+#[non_exhaustive] pub struct TrustStoreSettings { pub waiting: WaitingSettings, pub rotation: RotationOptions }
+#[non_exhaustive] pub struct WaitingLimits { pub per_source: usize, pub total: usize, pub rerecord: Duration }   // Default: 16, 1000, 60 s
+#[non_exhaustive] pub struct WaitingEntry { pub id: PeerId, pub source: Option<SocketAddr> }
 pub const FORMAT_VERSION: u32 = 1;
 impl TrustStore {
     pub fn open(state_dir: &Path) -> Result<TrustStore, Error>;        // creates <state_dir>/peers/{accepted,waiting}
-    pub fn with_limits(self, limits: WaitingLimits) -> TrustStore;
-    pub fn with_ipv6_prefix(self, bits: u8) -> TrustStore;            // default 64; above 128 is 128
-    pub fn with_when_full(self, when_full: WhenFull) -> TrustStore;   // default WhenFull::Refuse
-    pub fn with_record_interval(self, interval: Duration) -> TrustStore;  // default 1 s; zero is no limit
-    pub fn with_clock(self, clock: Clock) -> TrustStore;              // default Clock::system()
-    pub fn with_rotation(self, options: RotationOptions) -> TrustStore;
+    pub fn builder(state_dir: &Path) -> TrustStoreBuilder;           // the same, with settings
+    pub fn settings(&self) -> TrustStoreSettings;  pub fn non_defaults(&self) -> Vec<NonDefault>;
     pub fn rotation(&self) -> RotationOptions;   pub fn clock(&self) -> &Clock;
+    // Deprecated, one release: with_limits, with_ipv6_prefix, with_clock, with_rotation (each rebuilds a store; a
+    // with_limits or with_ipv6_prefix starts the waiting queue empty).
     pub fn waiting(&self) -> Result<Vec<WaitingEntry>, Error>;
     pub fn accepted(&self) -> Result<Vec<PeerId>, Error>;             // retired keys not listed
     pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial>;   // None once retired
@@ -129,10 +133,10 @@ Pairing: a server turns away an untrusted, key-proven peer and records it; the o
 `waiting`, then `accept`s or `remove`s by id; the next handshake finds `is_accepted`.
 `record_waiting` is bounded: invalid keys ignored, at most `per_source` entries per source (a
 newcomer is refused, unless `WhenFull::ReplaceOldest`, which lets peers sharing a source flush each
-other), one new peer per source every `with_record_interval`, the same peer from the same source at
+other), one new peer per source every `record_interval`, the same peer from the same source at
 most every `rerecord`, `total` in all. A flood can fill a source, so nobody new is recorded from it
 until an operator clears it; it cannot remove anyone. A source is an IPv4 address (an IPv4-mapped IPv6 address counts as
-its IPv4 address) or an IPv6 prefix of `with_ipv6_prefix` bits, /64 by default, since one
+its IPv4 address) or an IPv6 prefix of `ipv6_prefix` bits, /64 by default, since one
 holder controls every address of a /64; 128 counts each IPv6 address alone. The full address
 is still stored with the entry. `None` sources share one bucket. `is_accepted` and the `*_key`
 readers check that the stored bytes hash to the id.
@@ -142,11 +146,16 @@ storage, for a host that keeps waiting entries elsewhere (a table, a database):
 
 ```rust
 pub struct WaitingQueue;   // Clone, Debug
+// Builds the queue: limits(WaitingLimits), ipv6_prefix(u8; above 128 is 128), when_full(WhenFull),
+// record_interval(Duration; zero is no limit), settings(WaitingSettings) (replaces all), build() -> WaitingQueue.
+pub struct WaitingQueueBuilder;
+#[non_exhaustive] pub struct WaitingSettings { pub limits: WaitingLimits, pub ipv6_prefix: u8, pub when_full: WhenFull,
+                                               pub record_interval: Duration }   // Default: limits default, 64, Refuse, 1 s
 impl WaitingQueue {
-    pub fn new(limits: WaitingLimits) -> WaitingQueue;          // IPv6 grouped by /64
-    pub fn with_ipv6_prefix(self, bits: u8) -> WaitingQueue;    // above 128 is 128
-    pub fn with_when_full(self, when_full: WhenFull) -> WaitingQueue;      // default Refuse
-    pub fn with_record_interval(self, interval: Duration) -> WaitingQueue; // default DEFAULT_RECORD_INTERVAL
+    pub fn builder(limits: WaitingLimits) -> WaitingQueueBuilder;   // IPv6 grouped by /64, Refuse, 1 s
+    pub fn new(limits: WaitingLimits) -> WaitingQueue;          // builder(limits).build()
+    pub fn settings(&self) -> WaitingSettings;
+    // Deprecated, one release: with_ipv6_prefix.
     pub fn when_full(&self) -> WhenFull;  pub fn record_interval(&self) -> Duration;
     pub fn limits(&self) -> WaitingLimits;  pub fn ipv6_prefix(&self) -> u8;
     pub fn admit(&mut self, id: PeerId, source: Option<SocketAddr>, stored: usize, now: Instant) -> Admission;
@@ -156,7 +165,7 @@ impl WaitingQueue {
     pub fn len(&self) -> usize;  pub fn is_empty(&self) -> bool;
 }
 #[non_exhaustive] pub struct Admission { pub record: bool, pub evict: Vec<PeerId> }
-#[non_exhaustive] pub enum WhenFull { Refuse, ReplaceOldest }  // Copy, Default = Refuse
+#[non_exhaustive] pub enum WhenFull { Refuse, ReplaceOldest }  // Copy, Default = Refuse; text "refuse", "replace-oldest"
 pub const DEFAULT_RECORD_INTERVAL: Duration;                   // 1 s
 ```
 
@@ -339,7 +348,8 @@ impl Pairing {
     pub fn pin(pin: Pin, role: PinRole) -> Pairing;                 // feature pin
     pub fn device(label: &str) -> Pairing;
     pub fn allow_unverified(self, bool) -> Pairing;  pub fn allows_unverified(&self) -> bool;
-    pub fn with_random(self, Random) -> Pairing;                    // feature pin; default Random::os()
+    pub fn random(self, Random) -> Pairing;                         // feature pin; default Random::os()
+    // Deprecated, one release: with_random.
     pub fn mode(&self) -> Mode;  pub fn inviter(&self) -> Option<PeerId>;
     pub fn join(self, Channel) -> Result<PairingJoiner, PairingError>;
 }
@@ -351,22 +361,24 @@ pub struct PairingResponder;   // new(Channel, &TrustStore, &PairingDesk, source
                                // joiner() -> Option<&KeyMaterial>, deadline() -> Option<SystemTime>,
                                // time_left() -> Option<Duration>, check_deadline(), is_complete(), finish()
 #[non_exhaustive] pub enum Shown { Pin(PairingCode), UserCode { code: UserCode, expires: SystemTime } }
-pub struct Paired { pub peer: KeyMaterial, pub mode: Mode }
+#[non_exhaustive] pub struct Paired { pub peer: KeyMaterial, pub mode: Mode }
 #[non_exhaustive] pub enum Mode { Invitation, Pin, Device }
 #[non_exhaustive] pub enum PairRefusal { WrongCode, Expired, Exhausted, Throttled, Denied, Disabled }
 #[non_exhaustive] pub enum PairingError { Refused(PairRefusal), Protocol, Unverified, Local(Error) }
 
-pub struct CodeAlphabet { pub chars: String, pub len: usize }   // pin(): "0123456789" x 6; user_code(): "BCDFGHJKLMNPQRSTVWXZ" x 8
-impl CodeAlphabet { pub fn combinations(&self) -> u128; pub fn check(&self) -> Result<(), Error>; }
+#[non_exhaustive] pub struct CodeAlphabet { pub chars: String, pub len: usize }   // pin(): "0123456789" x 6; user_code(): "BCDFGHJKLMNPQRSTVWXZ" x 8
+impl CodeAlphabet { pub fn new(chars: impl Into<String>, len: usize) -> Self; pub fn combinations(&self) -> u128; pub fn check(&self) -> Result<(), Error>; }
 pub struct Pin;       // generate(&CodeAlphabet, &Random), parse(&CodeAlphabet, &str), as_str(); Debug hides it
 pub struct UserCode;  // the same
 pub struct PairingCode { pub slot: Option<u8>, pub pin: Pin }  // plain data
 
 pub struct PairingDesk;        // Clone, shared by every connection and the app
 impl PairingDesk {
-    pub fn new(random: Random) -> PairingDesk;
-    pub fn with_options(self, PairingOptions) -> Result<PairingDesk, Error>;   // InvalidOptions if meaningless
-    pub fn with_limits(self, DeskLimits) -> PairingDesk;  pub fn with_clock(self, Clock) -> PairingDesk;
+    pub fn builder(random: Random) -> PairingDeskBuilder;   // options(PairingOptions), limits(DeskLimits), clock(Clock),
+                                                            // settings(PairingDeskSettings), build() -> Result<_, Error> (InvalidOptions)
+    pub fn new(random: Random) -> PairingDesk;               // builder(random).build() with the defaults
+    pub fn settings(&self) -> PairingDeskSettings;  pub fn non_defaults(&self) -> Vec<NonDefault>;
+    // Deprecated, one release: with_options, with_limits, with_clock (they change the desk and every clone).
     pub fn options(&self) -> PairingOptions;  pub fn limits(&self) -> DeskLimits;
     pub fn show_pin(&self) -> Result<ShownPin, Error>;    // replaces the shown one
     pub fn shown_pin(&self) -> Option<ShownPin>;  pub fn clear_pin(&self);
@@ -379,19 +391,24 @@ impl PairingDesk {
     pub fn wait(&self, Ticket) -> Decision;      // blocking
     pub fn decided(&self, Ticket) -> Decided;    // Future<Output = Decision>
 }
-pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub pin_shown: bool, pub device: bool,
+#[non_exhaustive] pub struct PairingOptions { pub invitation: bool, pub pin: bool, pub pin_shown: bool, pub device: bool,
     pub pin_alphabet: CodeAlphabet, pub pin_ttl: Duration, pub pin_attempts: u32,
     pub user_code_alphabet: CodeAlphabet, pub device_ttl: Duration }   // Default: all on, 10 min, 1, 10 min
-pub struct DeskLimits { pub pending: usize, pub pending_per_source: usize, pub pin_runs_per_source: usize,
+#[non_exhaustive] pub struct DeskLimits { pub pending: usize, pub pending_per_source: usize, pub pin_runs_per_source: usize,
     pub wrong_codes_per_approver: usize, pub approver_window: Duration, pub wrong_codes_total: usize,
     pub ipv6_prefix: u8 }                       // Default: 32, 4, 8, 5, 60 s, 60, 64
+#[non_exhaustive] pub struct PairingDeskSettings { pub options: PairingOptions, pub limits: DeskLimits }
 impl PairingOptions { pub fn check(&self) -> Result<(), Error>; pub fn non_defaults(&self) -> Vec<NonDefault>; }
 impl DeskLimits { pub fn non_defaults(&self) -> Vec<NonDefault>; }
-// NonDefault is the crate root's: coqui_peer::NonDefault { setting, value, default }, NonDefault::new(setting, value, default)
+// NonDefault is the crate root's: coqui_peer::NonDefault { setting, value, default }, NonDefault::new(setting, value, default);
+// NonDefault::of_settings(&T) lists every key of a guatiao settings type that differs from its schema's default, named
+// by key path (`waiting.limits.per_source`), and of_settings_against(&T, &T) against another value;
+// NonDefault::from_difference(&guatiao::schema::Difference) renders one difference (text as text, else compact JSON, a
+// missing side `unset`).
 // Deprecated for one release: Weakening (an alias of NonDefault; its field `strict` is now `default`) and the `weakened()` methods.
-pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
-pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
-pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }
+#[non_exhaustive] pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
+#[non_exhaustive] pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
+#[non_exhaustive] pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }
 #[non_exhaustive] pub enum Decision { Code(Pin), Approved, Denied, Expired }
 
 pub struct Rotation;  // announce(&KeyMaterial) -> Vec<u8>; parse(&[u8]) -> Result<KeyMaterial, PairingError>
@@ -462,8 +479,8 @@ dashes or spaces; anything else is `Error::InvalidCode`. Normalising typed input
 for display are the caller's. `find_device` compares against every pending code in constant
 time.
 
-**Options cost what they loosen.** Nothing is refused for being non-default; `non_defaults()` lists what is
-looser than the default, and these are the costs:
+**Options cost what they change.** Nothing is refused for being non-default; `non_defaults()` lists every
+option that differs from its default, and these are the costs of the looser ones:
 
 - fewer `combinations()` of `pin_alphabet`: an attacker's one guess per run succeeds with
   probability `pin_attempts / combinations` per shown PIN; 10^4 codes is 1 in 10 000;
