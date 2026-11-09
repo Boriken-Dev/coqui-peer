@@ -45,6 +45,10 @@ pub use non_default::Weakening;
 pub use random::Random;
 pub use store::{
     FORMAT_VERSION, Invitation, InvitationEntry, InvitationId, InvitationOptions, MAX_LABEL,
-    Retiring, RotationEvent, RotationOptions, Successor, TrustStore, WaitingEntry, WaitingLimits,
+    Retiring, RotationEvent, RotationOptions, Successor, TrustStore, TrustStoreBuilder,
+    TrustStoreSettings, WaitingEntry, WaitingLimits,
 };
-pub use waiting::{Admission, DEFAULT_RECORD_INTERVAL, WaitingQueue, WhenFull};
+pub use waiting::{
+    Admission, DEFAULT_RECORD_INTERVAL, WaitingQueue, WaitingQueueBuilder, WaitingSettings,
+    WhenFull,
+};

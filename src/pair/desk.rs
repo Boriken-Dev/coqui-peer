@@ -23,32 +23,45 @@ const ISSUE_DRAWS: usize = 64;
 
 /// What a responder offers and how its codes are made. Every field has a default; any value
 /// with a meaning is accepted, and [`non_defaults`](PairingOptions::non_defaults) lists the ones that
-/// are looser than their default.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// differ from their default. A guatiao value: every key is optional and an unknown key is refused;
+/// the durations read as seconds, `[secs, nanos]` or `{secs, nanos}`. `#[non_exhaustive]`: start from
+/// [`Default`] and assign the fields.
+#[derive(Debug, Clone, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema)]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct PairingOptions {
     /// Whether joiners may pair with an invitation. Default `true`.
+    #[map(default = PairingOptions::default().invitation)]
     pub invitation: bool,
     /// Whether joiners may pair with a PIN (needs the `pin` feature). Default `true`.
+    #[map(default = PairingOptions::default().pin)]
     pub pin: bool,
     /// Whether a joiner may show a PIN for an operator to type into this side, which holds its
     /// run until the operator answers or `pin_ttl` passes. Turn it off where nobody is there
     /// to answer. Default `true`.
+    #[map(default = PairingOptions::default().pin_shown)]
     pub pin_shown: bool,
     /// Whether joiners may pair by the device flow. Default `true`.
+    #[map(default = PairingOptions::default().device)]
     pub device: bool,
     /// The alphabet and length of a PIN the desk shows. Default `0123456789` × 6.
+    #[map(default = PairingOptions::default().pin_alphabet)]
     pub pin_alphabet: CodeAlphabet,
     /// How long a shown PIN, or a slot waiting for a joiner's PIN, lasts. Default 10 minutes;
     /// it is also the window of [`DeskLimits::pin_runs_per_source`].
+    #[map(default = PairingOptions::default().pin_ttl)]
     pub pin_ttl: Duration,
     /// How many runs may try a shown PIN before it is burned; a run counts once it is past
     /// the first PAKE message, whatever its outcome. Default 1.
+    #[map(default = PairingOptions::default().pin_attempts)]
     pub pin_attempts: u32,
     /// The alphabet and length of a device-flow user code. Default RFC 8628's
     /// `BCDFGHJKLMNPQRSTVWXZ` × 8.
+    #[map(default = PairingOptions::default().user_code_alphabet)]
     pub user_code_alphabet: CodeAlphabet,
     /// How long a user code waits for approval. Default 10 minutes; it is also the window of
     /// [`DeskLimits::wrong_codes_total`].
+    #[map(default = PairingOptions::default().device_ttl)]
     pub device_ttl: Duration,
 }
 
@@ -69,27 +82,39 @@ impl Default for PairingOptions {
 }
 
 /// Bounds on a desk's pending work and on guessing. Every field has a default; any value is
-/// accepted, and [`non_defaults`](DeskLimits::non_defaults) lists the ones looser than their default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// accepted, and [`non_defaults`](DeskLimits::non_defaults) lists the ones that differ from
+/// their default. A guatiao value like [`PairingOptions`]; `#[non_exhaustive]`.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
+)]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct DeskLimits {
     /// Pairing exchanges in progress at once. Default 32.
+    #[map(default = DeskLimits::default().pending)]
     pub pending: usize,
     /// Pairing exchanges in progress at once from one source (every mode). A source is an IPv4
     /// address or an IPv6 prefix of [`ipv6_prefix`](DeskLimits::ipv6_prefix) bits. Default 4.
+    #[map(default = DeskLimits::default().pending_per_source)]
     pub pending_per_source: usize,
     /// PIN runs one source may start per [`PairingOptions::pin_ttl`]. A source is an IPv4
     /// address or an IPv6 prefix of [`ipv6_prefix`](DeskLimits::ipv6_prefix) bits. Default 8.
+    #[map(default = DeskLimits::default().pin_runs_per_source)]
     pub pin_runs_per_source: usize,
     /// Wrong user codes one approver may enter per
     /// [`approver_window`](DeskLimits::approver_window). Default 5.
+    #[map(default = DeskLimits::default().wrong_codes_per_approver)]
     pub wrong_codes_per_approver: usize,
     /// The window of [`wrong_codes_per_approver`](DeskLimits::wrong_codes_per_approver).
     /// Default 1 minute.
+    #[map(default = DeskLimits::default().approver_window)]
     pub approver_window: Duration,
     /// Wrong user codes all approvers together may enter per
     /// [`PairingOptions::device_ttl`]. Default 60.
+    #[map(default = DeskLimits::default().wrong_codes_total)]
     pub wrong_codes_total: usize,
     /// The IPv6 prefix length sources are grouped by. Default 64.
+    #[map(default = DeskLimits::default().ipv6_prefix)]
     pub ipv6_prefix: u8,
 }
 
@@ -107,10 +132,6 @@ impl Default for DeskLimits {
     }
 }
 
-fn note(found: &mut Vec<NonDefault>, setting: &str, value: String, default: String) {
-    found.push(NonDefault::new(setting, value, default));
-}
-
 impl PairingOptions {
     /// Whether every option has a meaning.
     ///
@@ -126,116 +147,107 @@ impl PairingOptions {
         Ok(())
     }
 
-    /// The options looser than their default: fewer code combinations, more attempts per PIN,
-    /// longer lifetimes. Turning a mode off lists nothing.
+    /// Every option that differs from its default, named by key path (`pin_attempts`,
+    /// `pin_alphabet.len`).
     pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let default = Self::default();
-        let mut found = Vec::new();
-        if self.pin_alphabet.combinations() < default.pin_alphabet.combinations() {
-            note(
-                &mut found,
-                "pin_alphabet",
-                self.pin_alphabet.combinations().to_string(),
-                default.pin_alphabet.combinations().to_string(),
-            );
-        }
-        if self.pin_attempts > default.pin_attempts {
-            note(
-                &mut found,
-                "pin_attempts",
-                self.pin_attempts.to_string(),
-                default.pin_attempts.to_string(),
-            );
-        }
-        if self.pin_ttl > default.pin_ttl {
-            note(
-                &mut found,
-                "pin_ttl",
-                self.pin_ttl.as_secs().to_string(),
-                default.pin_ttl.as_secs().to_string(),
-            );
-        }
-        if self.user_code_alphabet.combinations() < default.user_code_alphabet.combinations() {
-            note(
-                &mut found,
-                "user_code_alphabet",
-                self.user_code_alphabet.combinations().to_string(),
-                default.user_code_alphabet.combinations().to_string(),
-            );
-        }
-        if self.device_ttl > default.device_ttl {
-            note(
-                &mut found,
-                "device_ttl",
-                self.device_ttl.as_secs().to_string(),
-                default.device_ttl.as_secs().to_string(),
-            );
-        }
-        found
+        NonDefault::of_settings(self)
     }
 
     /// The old name of [`non_defaults`](PairingOptions::non_defaults).
-    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    #[deprecated(note = "renamed to `non_defaults`")]
     pub fn weakened(&self) -> Vec<NonDefault> {
         self.non_defaults()
     }
 }
 
 impl DeskLimits {
-    /// The limits looser than their default.
+    /// Every limit that differs from its default, named by key path.
     pub fn non_defaults(&self) -> Vec<NonDefault> {
-        let default = Self::default();
-        let mut found = Vec::new();
-        for (setting, value, standard) in [
-            ("pending", self.pending, default.pending),
-            (
-                "pending_per_source",
-                self.pending_per_source,
-                default.pending_per_source,
-            ),
-            (
-                "pin_runs_per_source",
-                self.pin_runs_per_source,
-                default.pin_runs_per_source,
-            ),
-            (
-                "wrong_codes_per_approver",
-                self.wrong_codes_per_approver,
-                default.wrong_codes_per_approver,
-            ),
-            (
-                "wrong_codes_total",
-                self.wrong_codes_total,
-                default.wrong_codes_total,
-            ),
-        ] {
-            if value > standard {
-                note(&mut found, setting, value.to_string(), standard.to_string());
-            }
-        }
-        if self.approver_window < default.approver_window {
-            note(
-                &mut found,
-                "approver_window",
-                self.approver_window.as_secs().to_string(),
-                default.approver_window.as_secs().to_string(),
-            );
-        }
-        if self.ipv6_prefix > default.ipv6_prefix {
-            note(
-                &mut found,
-                "ipv6_prefix",
-                self.ipv6_prefix.to_string(),
-                default.ipv6_prefix.to_string(),
-            );
-        }
-        found
+        NonDefault::of_settings(self)
     }
 
     /// The old name of [`non_defaults`](DeskLimits::non_defaults).
-    #[deprecated(since = "0.0.0", note = "renamed to `non_defaults`")]
+    #[deprecated(note = "renamed to `non_defaults`")]
     pub fn weakened(&self) -> Vec<NonDefault> {
         self.non_defaults()
+    }
+}
+
+/// What a [`PairingDesk`] is built from, besides its random source and clock, in the form a
+/// file, a form or a peer fills.
+///
+/// Every key is optional (an absent one is its default) and an unknown key is refused. The type
+/// is a guatiao value (`from_value`, `to_value`, `schema`), and `guatiao_serde::text` reads and
+/// writes its text. It is `#[non_exhaustive]`: start from [`Default`] and assign the fields.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Default, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
+)]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct PairingDeskSettings {
+    /// What the desk offers and how its codes are made.
+    #[map(default = PairingDeskSettings::default().options)]
+    pub options: PairingOptions,
+    /// The bounds on pending work and on guessing.
+    #[map(default = PairingDeskSettings::default().limits)]
+    pub limits: DeskLimits,
+}
+
+impl PairingDeskSettings {
+    /// Every setting that differs from its default, named by key path (`limits.pending`).
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
+        NonDefault::of_settings(self)
+    }
+}
+
+/// Builds a [`PairingDesk`]: [`PairingDesk::builder`], the settings, then
+/// [`build`](Self::build).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct PairingDeskBuilder {
+    random: Random,
+    settings: PairingDeskSettings,
+    clock: Clock,
+}
+
+impl PairingDeskBuilder {
+    /// What the desk offers and how its codes are made; checked by [`build`](Self::build).
+    pub fn options(mut self, options: PairingOptions) -> Self {
+        self.settings.options = options;
+        self
+    }
+
+    /// The bounds on pending work and on guessing.
+    pub fn limits(mut self, limits: DeskLimits) -> Self {
+        self.settings.limits = limits;
+        self
+    }
+
+    /// The clock the desk reads. Default the system clock.
+    pub fn clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// The options and the limits from `settings`. Replaces both set before, and is replaced by
+    /// what is set after it. The random source and the clock are code, not settings, and stay.
+    pub fn settings(mut self, settings: PairingDeskSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// The desk.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidOptions`] as [`PairingOptions::check`].
+    pub fn build(self) -> Result<PairingDesk, Error> {
+        self.settings.options.check()?;
+        Ok(PairingDesk::from_parts(
+            self.random,
+            self.clock,
+            self.settings,
+        ))
     }
 }
 
@@ -260,6 +272,7 @@ pub enum Decision {
 
 /// A PIN the desk shows, for the caller to display.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ShownPin {
     /// The PIN.
     pub pin: Pin,
@@ -269,6 +282,7 @@ pub struct ShownPin {
 
 /// A joiner that shows its own PIN and waits for the operator to type it.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PendingSlot {
     /// The slot the desk assigned, which the joiner shows with its PIN.
     pub slot: u8,
@@ -283,6 +297,7 @@ pub struct PendingSlot {
 /// A device-flow joiner found by its user code: what an app may show before it approves or
 /// denies.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PendingDevice {
     /// The joiner's id.
     pub peer: PeerId,
@@ -456,15 +471,29 @@ impl State {
 }
 
 impl PairingDesk {
+    /// A builder for a desk that draws PINs, slots and user codes from `random`, with the default
+    /// options and limits and the system clock.
+    pub fn builder(random: Random) -> PairingDeskBuilder {
+        PairingDeskBuilder {
+            random,
+            settings: PairingDeskSettings::default(),
+            clock: Clock::system(),
+        }
+    }
+
     /// A desk with the default options and limits, the system clock, and `random` for PINs,
-    /// slots and user codes.
+    /// slots and user codes: `PairingDesk::builder(random).build()`.
     pub fn new(random: Random) -> Self {
+        Self::from_parts(random, Clock::system(), PairingDeskSettings::default())
+    }
+
+    fn from_parts(random: Random, clock: Clock, settings: PairingDeskSettings) -> Self {
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State {
-                    options: PairingOptions::default(),
-                    limits: DeskLimits::default(),
-                    clock: Clock::system(),
+                    options: settings.options,
+                    limits: settings.limits,
+                    clock,
                     random,
                     shown: None,
                     gone: PairRefusal::Exhausted,
@@ -493,6 +522,7 @@ impl PairingDesk {
     /// # Errors
     ///
     /// [`Error::InvalidOptions`] as [`PairingOptions::check`].
+    #[deprecated(note = "use `PairingDesk::builder(random).options(options)`")]
     pub fn with_options(self, options: PairingOptions) -> Result<Self, Error> {
         options.check()?;
         self.state().options = options;
@@ -500,6 +530,7 @@ impl PairingDesk {
     }
 
     /// This desk with `limits`; it applies to every clone.
+    #[deprecated(note = "use `PairingDesk::builder(random).limits(limits)`")]
     #[must_use]
     pub fn with_limits(self, limits: DeskLimits) -> Self {
         self.state().limits = limits;
@@ -507,10 +538,25 @@ impl PairingDesk {
     }
 
     /// This desk reading `clock`; it applies to every clone.
+    #[deprecated(note = "use `PairingDesk::builder(random).clock(clock)`")]
     #[must_use]
     pub fn with_clock(self, clock: Clock) -> Self {
         self.state().clock = clock;
         self
+    }
+
+    /// The settings in force.
+    pub fn settings(&self) -> PairingDeskSettings {
+        let state = self.state();
+        PairingDeskSettings {
+            options: state.options.clone(),
+            limits: state.limits,
+        }
+    }
+
+    /// Every setting that differs from its default, named by key path.
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
+        self.settings().non_defaults()
     }
 
     /// The options in force.
@@ -921,15 +967,18 @@ mod tests {
         let seen = now.clone();
         let clock =
             Clock::from_fn(move || UNIX_EPOCH + Duration::from_secs(seen.load(Ordering::SeqCst)));
-        let desk = PairingDesk::new(Random::from_fn(|out| {
+        let limits = DeskLimits {
+            wrong_codes_total: 1000,
+            ..DeskLimits::default()
+        };
+        let desk = PairingDesk::builder(Random::from_fn(|out| {
             out.fill(7);
             Ok(())
         }))
-        .with_clock(clock)
-        .with_limits(DeskLimits {
-            wrong_codes_total: 1000,
-            ..DeskLimits::default()
-        });
+        .clock(clock)
+        .limits(limits)
+        .build()
+        .unwrap();
         for host in 0..200u8 {
             let source = SocketAddr::from(([192, 0, 2, host], 1000));
             desk.pin_run(Some(source)).unwrap();

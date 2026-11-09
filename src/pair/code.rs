@@ -12,7 +12,9 @@ use crate::random::Random;
 /// what a person typed, and grouping a code for display, is the caller's. Any alphabet and
 /// length with a meaning is accepted; [`combinations`](CodeAlphabet::combinations) says how many
 /// codes there are, which is what an attacker's one guess is against.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema)]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct CodeAlphabet {
     /// The characters a code is made of, each once.
     pub chars: String,
@@ -21,6 +23,14 @@ pub struct CodeAlphabet {
 }
 
 impl CodeAlphabet {
+    /// An alphabet of the characters `chars`, each once, and codes of `len` of them.
+    pub fn new(chars: impl Into<String>, len: usize) -> Self {
+        Self {
+            chars: chars.into(),
+            len,
+        }
+    }
+
     /// The default PIN alphabet: `0123456789`, 6 characters (10^6 codes).
     pub fn pin() -> Self {
         Self {
@@ -240,16 +250,10 @@ mod tests {
     fn combinations_are_reported_not_refused() {
         assert_eq!(CodeAlphabet::pin().combinations(), 1_000_000);
         assert_eq!(CodeAlphabet::user_code().combinations(), 20u128.pow(8));
-        let tiny = CodeAlphabet {
-            chars: "01".to_owned(),
-            len: 1,
-        };
+        let tiny = CodeAlphabet::new("01", 1);
         assert!(tiny.check().is_ok());
         assert_eq!(tiny.combinations(), 2);
-        let huge = CodeAlphabet {
-            chars: "01".to_owned(),
-            len: 1000,
-        };
+        let huge = CodeAlphabet::new("01", 1000);
         assert_eq!(huge.combinations(), u128::MAX);
     }
 

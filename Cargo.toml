@@ -20,9 +20,6 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = []
 # Serialize and deserialize `PeerId` and `Digest` as their text form.
 serde = ["dep:serde"]
-# `Digest` (as its name) and `WaitingLimits` as guatiao values with a schema, and
-# `NonDefault::from_difference`.
-guatiao = ["dep:guatiao", "dep:guatiao-serde"]
 # Async helpers that drive a handshake over tokio streams and message transports; the
 # `_until` forms use tokio's timer.
 tokio = ["dep:tokio"]
@@ -44,10 +41,10 @@ subtle = { version = "2.6", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
 # The text form of ids, behind `serde`.
 serde = { version = "1", default-features = false, features = ["derive", "std"], optional = true }
-# The value form of `Digest` and `WaitingLimits`, behind `guatiao`; alpha, by revision, as the family pins it.
-guatiao = { git = "https://github.com/Boriken-Dev/guatiao", rev = "03e1cac8be06715a8037f45f1610c5894eea0b5b", default-features = false, features = ["derive"], optional = true }
-# The text rendering of a non-default value, behind `guatiao`.
-guatiao-serde = { git = "https://github.com/Boriken-Dev/guatiao", rev = "03e1cac8be06715a8037f45f1610c5894eea0b5b", default-features = false, features = ["json"], optional = true }
+# The value form and schema of `Digest` and the settings types; alpha, by revision, as the family pins it.
+guatiao = { git = "https://github.com/Boriken-Dev/guatiao", rev = "03e1cac8be06715a8037f45f1610c5894eea0b5b", default-features = false, features = ["derive"] }
+# The text rendering of a non-default value.
+guatiao-serde = { git = "https://github.com/Boriken-Dev/guatiao", rev = "03e1cac8be06715a8037f45f1610c5894eea0b5b", default-features = false, features = ["json"] }
 # The async drivers, behind `tokio`.
 tokio = { version = "1", default-features = false, features = ["io-util", "time"], optional = true }
 # PIN pairing, behind `pin`. Pre-1.0: the RustCrypto SPAKE2, HKDF and HMAC release lines.
@@ -58,7 +55,7 @@ hmac = { version = "0.13", default-features = false, optional = true }
 rand_core = { version = "0.6", default-features = false, features = ["getrandom"], optional = true }
 
 # The channel contract and framing, behind `coqui-transport`. It never depends on this crate.
-coqui-transport = { git = "https://github.com/Boriken-Dev/coqui-transport", rev = "82563e2282149e543b95cc1dd00fbafc3bfcdf52", optional = true }
+coqui-transport = { git = "https://github.com/Boriken-Dev/coqui-transport", rev = "cb11ff2c1e5a9dbae0580973df4bcd23aaebbd07", optional = true }
 
 [dev-dependencies]
 # Temporary store directories.

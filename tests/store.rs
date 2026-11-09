@@ -7,17 +7,20 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use coqui_peer::{
-    Clock, Error, InvitationOptions, KeyMaterial, PeerId, Random, Retiring, RotationEvent,
-    RotationOptions, Successor, TrustStore, WaitingLimits,
+    Clock, Error, InvitationOptions, KeyMaterial, PeerId, Random, RotationEvent, RotationOptions,
+    TrustStore, WaitingLimits,
 };
 
-fn store() -> (tempfile::TempDir, TrustStore) {
+fn builder() -> (tempfile::TempDir, coqui_peer::TrustStoreBuilder) {
     let directory = tempfile::tempdir().unwrap();
     // Most of these tests record in one instant: the rate limit has a test of its own.
-    let store = TrustStore::open(directory.path())
-        .unwrap()
-        .with_record_interval(Duration::ZERO);
-    (directory, store)
+    let builder = TrustStore::builder(directory.path()).record_interval(Duration::ZERO);
+    (directory, builder)
+}
+
+fn store() -> (tempfile::TempDir, TrustStore) {
+    let (directory, builder) = builder();
+    (directory, builder.build().unwrap())
 }
 
 fn key(method: &str, seed: u8) -> KeyMaterial {
@@ -81,12 +84,17 @@ fn a_file_that_does_not_hash_to_its_name_is_not_accepted() {
 
 #[test]
 fn one_source_filling_its_cap_does_not_block_another() {
-    let (_directory, store) = store();
-    let store = store.with_limits(WaitingLimits {
-        per_source: 2,
-        total: 100,
-        rerecord: Duration::from_secs(60),
-    });
+    let (_directory, store) = builder();
+    let store = store
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 2;
+            value.total = 100;
+            value.rerecord = Duration::from_secs(60);
+            value
+        })
+        .build()
+        .unwrap();
     let noisy: Vec<KeyMaterial> = (0..5).map(|seed| key("example", seed)).collect();
     for peer in &noisy {
         record(&store, peer, "192.0.2.1:1000");
@@ -112,14 +120,18 @@ fn one_source_filling_its_cap_does_not_block_another() {
 
 #[test]
 fn a_store_can_be_told_to_replace_the_oldest_of_a_full_source() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let store = store
-        .with_limits(WaitingLimits {
-            per_source: 2,
-            total: 100,
-            rerecord: Duration::from_secs(60),
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 2;
+            value.total = 100;
+            value.rerecord = Duration::from_secs(60);
+            value
         })
-        .with_when_full(coqui_peer::WhenFull::ReplaceOldest);
+        .when_full(coqui_peer::WhenFull::ReplaceOldest)
+        .build()
+        .unwrap();
     let noisy: Vec<KeyMaterial> = (0..3).map(|seed| key("example", seed)).collect();
     for peer in &noisy {
         record(&store, peer, "192.0.2.1:1000");
@@ -143,14 +155,18 @@ fn a_store_records_one_new_peer_of_a_source_per_interval() {
 
 #[test]
 fn settings_survive_a_change_of_limits() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let store = store
-        .with_when_full(coqui_peer::WhenFull::ReplaceOldest)
-        .with_limits(WaitingLimits {
-            per_source: 1,
-            total: 100,
-            rerecord: Duration::from_secs(60),
-        });
+        .when_full(coqui_peer::WhenFull::ReplaceOldest)
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 1;
+            value.total = 100;
+            value.rerecord = Duration::from_secs(60);
+            value
+        })
+        .build()
+        .unwrap();
     record(&store, &key("example", 0), "192.0.2.1:1000");
     record(&store, &key("example", 1), "192.0.2.1:1000");
     let waiting = store.waiting().unwrap();
@@ -160,12 +176,17 @@ fn settings_survive_a_change_of_limits() {
 
 #[test]
 fn the_total_cap_stops_recording() {
-    let (_directory, store) = store();
-    let store = store.with_limits(WaitingLimits {
-        per_source: 100,
-        total: 2,
-        rerecord: Duration::from_secs(60),
-    });
+    let (_directory, store) = builder();
+    let store = store
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 100;
+            value.total = 2;
+            value.rerecord = Duration::from_secs(60);
+            value
+        })
+        .build()
+        .unwrap();
     for seed in 0..5 {
         record(&store, &key("example", seed), "192.0.2.1:1000");
     }
@@ -208,12 +229,17 @@ fn oversized_or_malformed_keys_are_not_recorded() {
 
 /// The waiting entries after one peer is recorded from each of `sources`, two per source at most.
 fn record_from_each(sources: &[&str]) -> Vec<coqui_peer::WaitingEntry> {
-    let (_directory, store) = store();
-    let store = store.with_limits(WaitingLimits {
-        per_source: 2,
-        total: 100,
-        rerecord: Duration::from_secs(60),
-    });
+    let (_directory, store) = builder();
+    let store = store
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 2;
+            value.total = 100;
+            value.rerecord = Duration::from_secs(60);
+            value
+        })
+        .build()
+        .unwrap();
     for (seed, source) in (0u8..).zip(sources) {
         record(&store, &key("example", seed), source);
     }
@@ -273,27 +299,35 @@ fn ipv4_mapped_ipv6_sources_count_as_ipv4() {
 
 #[test]
 fn the_ipv6_prefix_is_configurable() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let store = store
-        .with_limits(WaitingLimits {
-            per_source: 1,
-            total: 100,
-            rerecord: Duration::from_secs(60),
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 1;
+            value.total = 100;
+            value.rerecord = Duration::from_secs(60);
+            value
         })
-        .with_ipv6_prefix(48);
+        .ipv6_prefix(48)
+        .build()
+        .unwrap();
     for (seed, source) in (0u8..).zip(["[2001:db8:1:2::1]:1000", "[2001:db8:1:3::1]:1000"]) {
         record(&store, &key("example", seed), source);
     }
     assert_eq!(store.waiting().unwrap().len(), 1);
 
-    let (_directory, store) = self::store();
+    let (_directory, store) = builder();
     let store = store
-        .with_limits(WaitingLimits {
-            per_source: 1,
-            total: 100,
-            rerecord: Duration::from_secs(60),
+        .limits({
+            let mut value = WaitingLimits::default();
+            value.per_source = 1;
+            value.total = 100;
+            value.rerecord = Duration::from_secs(60);
+            value
         })
-        .with_ipv6_prefix(128);
+        .ipv6_prefix(128)
+        .build()
+        .unwrap();
     for (seed, source) in (0u8..).zip(["[2001:db8:1:2::1]:1000", "[2001:db8:1:2::2]:1000"]) {
         record(&store, &key("example", seed), source);
     }
@@ -334,9 +368,9 @@ const T0: u64 = 1_800_000_000;
 
 #[test]
 fn an_invitation_redeems_once() {
-    let (directory, store) = store();
+    let (directory, store) = builder();
     let hand = Hand::at(T0);
-    let store = store.with_clock(hand.clock());
+    let store = store.clock(hand.clock()).build().unwrap();
     let invitation = store
         .invite(&counting(), InvitationOptions::default(), "kitchen tablet")
         .unwrap();
@@ -372,9 +406,10 @@ fn an_invitation_redeems_once() {
 #[test]
 fn an_invitation_with_uses_counts_them_down() {
     let (_directory, store) = store();
-    let options = InvitationOptions {
-        uses: 2,
-        ..InvitationOptions::default()
+    let options = {
+        let mut value = InvitationOptions::default();
+        value.uses = 2;
+        value
     };
     let invitation = store.invite(&counting(), options, "").unwrap();
     assert_eq!(store.redeem(&invitation.secret).unwrap().uses, 1);
@@ -406,12 +441,14 @@ fn concurrent_redemptions_of_one_use_succeed_once() {
 
 #[test]
 fn an_expired_invitation_is_refused_and_removed() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let hand = Hand::at(T0);
-    let store = store.with_clock(hand.clock());
-    let options = InvitationOptions {
-        valid_for: Duration::from_secs(600),
-        uses: 1,
+    let store = store.clock(hand.clock()).build().unwrap();
+    let options = {
+        let mut value = InvitationOptions::default();
+        value.valid_for = Duration::from_secs(600);
+        value.uses = 1;
+        value
     };
     let invitation = store.invite(&counting(), options, "").unwrap();
     hand.advance(599);
@@ -441,13 +478,15 @@ fn a_revoked_invitation_cannot_be_redeemed() {
 #[test]
 fn meaningless_invitation_options_are_errors() {
     let (_directory, store) = store();
-    let zero_uses = InvitationOptions {
-        uses: 0,
-        ..InvitationOptions::default()
+    let zero_uses = {
+        let mut value = InvitationOptions::default();
+        value.uses = 0;
+        value
     };
-    let zero_time = InvitationOptions {
-        valid_for: Duration::ZERO,
-        ..InvitationOptions::default()
+    let zero_time = {
+        let mut value = InvitationOptions::default();
+        value.valid_for = Duration::ZERO;
+        value
     };
     for (options, label) in [
         (zero_uses, ""),
@@ -464,9 +503,9 @@ fn meaningless_invitation_options_are_errors() {
 
 #[test]
 fn a_successor_is_promoted_and_the_old_key_retires() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let hand = Hand::at(T0);
-    let store = store.with_clock(hand.clock());
+    let store = store.clock(hand.clock()).build().unwrap();
     let (old, new) = (key("example", 1), key("example", 2));
     store.accept_key(&old).unwrap();
     assert!(store.successor_key(&new.id()).is_none());
@@ -474,12 +513,13 @@ fn a_successor_is_promoted_and_the_old_key_retires() {
     assert_eq!(store.successor_key(&new.id()), Some(new.clone()));
     assert!(!store.is_accepted(&new.id()));
     assert_eq!(
-        store.successors().unwrap(),
-        [Successor {
-            old: old.id(),
-            new: new.id(),
-            proven: None,
-        }]
+        store
+            .successors()
+            .unwrap()
+            .iter()
+            .map(|successor| (successor.old, successor.new, successor.proven))
+            .collect::<Vec<_>>(),
+        [(old.id(), new.id(), None)]
     );
 
     store.prove_successor(&new.id()).unwrap();
@@ -490,12 +530,13 @@ fn a_successor_is_promoted_and_the_old_key_retires() {
     assert!(store.successors().unwrap().is_empty());
     let retires = UNIX_EPOCH + Duration::from_secs(T0 + 24 * 3600);
     assert_eq!(
-        store.retiring().unwrap(),
-        [Retiring {
-            id: old.id(),
-            successor: Some(new.id()),
-            retires
-        }]
+        store
+            .retiring()
+            .unwrap()
+            .iter()
+            .map(|retiring| (retiring.id, retiring.successor, retiring.retires))
+            .collect::<Vec<_>>(),
+        [(old.id(), Some(new.id()), retires)]
     );
     assert_eq!(
         store.take_rotation_events(),
@@ -528,15 +569,18 @@ fn a_successor_is_promoted_and_the_old_key_retires() {
 
 #[test]
 fn the_retire_window_is_an_option() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let hand = Hand::at(T0);
     let store = store
-        .with_clock(hand.clock())
-        .with_rotation(RotationOptions {
-            retire_after: Duration::ZERO,
-            require_approval: true,
-            ..RotationOptions::default()
-        });
+        .clock(hand.clock())
+        .rotation({
+            let mut value = RotationOptions::default();
+            value.retire_after = Duration::ZERO;
+            value.require_approval = true;
+            value
+        })
+        .build()
+        .unwrap();
     assert!(store.rotation().require_approval);
     let (old, new) = (key("example", 1), key("example", 2));
     store.accept_key(&old).unwrap();
@@ -589,9 +633,9 @@ fn a_new_announcement_replaces_the_pending_successor() {
 
 #[test]
 fn an_accepted_key_cannot_claim_another_keys_successor() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let hand = Hand::at(T0);
-    let store = store.with_clock(hand.clock());
+    let store = store.clock(hand.clock()).build().unwrap();
     let (rotating, other, successor) = (key("example", 1), key("example", 2), key("example", 3));
     store.accept_key(&rotating).unwrap();
     store.accept_key(&other).unwrap();
@@ -604,12 +648,13 @@ fn an_accepted_key_cannot_claim_another_keys_successor() {
         Err(Error::SuccessorTaken)
     ));
     assert_eq!(
-        store.successors().unwrap(),
-        [Successor {
-            old: rotating.id(),
-            new: successor.id(),
-            proven: None,
-        }]
+        store
+            .successors()
+            .unwrap()
+            .iter()
+            .map(|successor| (successor.old, successor.new, successor.proven))
+            .collect::<Vec<_>>(),
+        [(rotating.id(), successor.id(), None)]
     );
     // Promotion retires the key that announced it, and only that one.
     store.prove_successor(&successor.id()).unwrap();
@@ -624,9 +669,9 @@ fn an_accepted_key_cannot_claim_another_keys_successor() {
 
 #[test]
 fn a_retired_key_that_pairs_again_is_accepted_again() {
-    let (_directory, store) = store();
+    let (_directory, store) = builder();
     let hand = Hand::at(T0);
-    let store = store.with_clock(hand.clock());
+    let store = store.clock(hand.clock()).build().unwrap();
     let (old, new) = (key("example", 1), key("example", 2));
     store.accept_key(&old).unwrap();
     store.announce_successor(&old.id(), &new).unwrap();
@@ -647,9 +692,10 @@ fn a_retired_key_that_pairs_again_is_accepted_again() {
 #[test]
 fn a_revocation_wins_over_redemptions_in_flight() {
     let (_directory, store) = store();
-    let options = InvitationOptions {
-        uses: 1_000_000,
-        ..InvitationOptions::default()
+    let options = {
+        let mut value = InvitationOptions::default();
+        value.uses = 1_000_000;
+        value
     };
     for round in 0..20 {
         let random = counting();
@@ -689,9 +735,9 @@ fn a_revocation_wins_over_redemptions_in_flight() {
 
 #[test]
 fn a_successor_is_promoted_only_once_proven_unless_allowed() {
-    let (_directory, store) = store();
+    let (directory, store) = builder();
     let hand = Hand::at(T0);
-    let store = store.with_clock(hand.clock());
+    let store = store.clock(hand.clock()).build().unwrap();
     let (old, new) = (key("example", 1), key("example", 2));
     store.accept_key(&old).unwrap();
     store.announce_successor(&old.id(), &new).unwrap();
@@ -713,10 +759,15 @@ fn a_successor_is_promoted_only_once_proven_unless_allowed() {
 
     // An option promotes without a proof.
     let (old, new) = (key("example", 3), key("example", 4));
-    let store = store.with_rotation(RotationOptions {
-        allow_unproven: true,
-        ..RotationOptions::default()
-    });
+    let store = TrustStore::builder(directory.path())
+        .clock(hand.clock())
+        .rotation({
+            let mut value = RotationOptions::default();
+            value.allow_unproven = true;
+            value
+        })
+        .build()
+        .unwrap();
     store.accept_key(&old).unwrap();
     store.announce_successor(&old.id(), &new).unwrap();
     assert_eq!(store.promote_successor(&new.id()).unwrap(), old.id());

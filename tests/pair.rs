@@ -7,7 +7,8 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use coqui_peer::pair::{
     Channel, CodeAlphabet, DeskLimits, Mode, PairRefusal, Paired, Pairing, PairingDesk,
-    PairingError, PairingJoiner, PairingOptions, PairingResponder, Rotation, Shown,
+    PairingDeskBuilder, PairingError, PairingJoiner, PairingOptions, PairingResponder, Rotation,
+    Shown,
 };
 use coqui_peer::{Clock, Error, InvitationOptions, KeyMaterial, Random, TrustStore};
 
@@ -58,16 +59,40 @@ struct Responder {
 fn fresh() -> Responder {
     let directory = tempfile::tempdir().unwrap();
     let hand = Hand::new();
-    let store = TrustStore::open(directory.path())
-        .unwrap()
-        .with_clock(hand.clock());
-    let desk = PairingDesk::new(counting(100)).with_clock(hand.clock());
+    let store = TrustStore::builder(directory.path())
+        .clock(hand.clock())
+        .build()
+        .unwrap();
+    let desk = PairingDesk::builder(counting(100))
+        .clock(hand.clock())
+        .build()
+        .unwrap();
     Responder {
         _directory: directory,
         store,
         desk,
         hand,
     }
+}
+
+/// The world with a desk as `configure` builds it.
+#[cfg(feature = "pin")]
+fn with_desk(
+    world: Responder,
+    configure: impl FnOnce(PairingDeskBuilder) -> PairingDeskBuilder,
+) -> Responder {
+    let desk = desk_with(&world, configure);
+    Responder { desk, ..world }
+}
+
+/// A desk like `fresh`'s, on the same clock, as `configure` builds it.
+fn desk_with(
+    world: &Responder,
+    configure: impl FnOnce(PairingDeskBuilder) -> PairingDeskBuilder,
+) -> PairingDesk {
+    configure(PairingDesk::builder(counting(100)).clock(world.hand.clock()))
+        .build()
+        .unwrap()
 }
 
 /// A channel that proved both keys and verified the other side (a pin), with `binding`.
@@ -218,9 +243,11 @@ fn an_invitation_needs_a_channel_that_proved_the_inviter() {
 fn an_expired_invitation_is_refused() {
     let world = fresh();
     let (joiner_key, responder_key) = (key(1), key(2));
-    let options = InvitationOptions {
-        valid_for: Duration::from_secs(60),
-        uses: 1,
+    let options = {
+        let mut value = InvitationOptions::default();
+        value.valid_for = Duration::from_secs(60);
+        value.uses = 1;
+        value
     };
     let invitation = world.store.invite(&counting(7), options, "").unwrap();
     world.hand.advance(60);
@@ -337,9 +364,12 @@ fn an_unapproved_device_expires() {
 fn wrong_user_codes_are_throttled_per_approver_and_in_all() {
     let world = fresh();
     let world = Responder {
-        desk: world.desk.clone().with_limits(DeskLimits {
-            wrong_codes_total: 7,
-            ..DeskLimits::default()
+        desk: desk_with(&world, |builder| {
+            builder.limits({
+                let mut value = DeskLimits::default();
+                value.wrong_codes_total = 7;
+                value
+            })
         }),
         ..world
     };
@@ -432,14 +462,13 @@ fn the_device_flow_needs_a_verified_responder_unless_allowed() {
 #[test]
 fn a_mode_the_responder_turned_off_is_refused() {
     let world = fresh();
-    let desk = world
-        .desk
-        .clone()
-        .with_options(PairingOptions {
-            device: false,
-            ..PairingOptions::default()
+    let desk = desk_with(&world, |builder| {
+        builder.options({
+            let mut value = PairingOptions::default();
+            value.device = false;
+            value
         })
-        .unwrap();
+    });
     let joiner = Pairing::device("")
         .join(proven(&key(1), &key(2), b""))
         .unwrap();
@@ -451,9 +480,12 @@ fn a_mode_the_responder_turned_off_is_refused() {
 #[test]
 fn pending_exchanges_are_bounded() {
     let world = fresh();
-    let desk = world.desk.clone().with_limits(DeskLimits {
-        pending: 1,
-        ..DeskLimits::default()
+    let desk = desk_with(&world, |builder| {
+        builder.limits({
+            let mut value = DeskLimits::default();
+            value.pending = 1;
+            value
+        })
     });
     let mut first = PairingResponder::new(proven(&key(2), &key(1), b""), &world.store, &desk, None);
     let mut joiner = Pairing::device("")
@@ -483,16 +515,15 @@ fn pending_exchanges_are_bounded() {
 fn non_default_options_are_reported_not_refused() {
     assert!(PairingOptions::default().non_defaults().is_empty());
     assert!(DeskLimits::default().non_defaults().is_empty());
-    let options = PairingOptions {
-        pin_alphabet: CodeAlphabet {
-            chars: "0123456789".to_owned(),
-            len: 4,
-        },
-        pin_attempts: 3,
-        ..PairingOptions::default()
+    let options = {
+        let mut value = PairingOptions::default();
+        value.pin_alphabet = CodeAlphabet::new("0123456789", 4);
+        value.pin_attempts = 3;
+        value
     };
-    let desk = PairingDesk::new(counting(0))
-        .with_options(options.clone())
+    let desk = PairingDesk::builder(counting(0))
+        .options(options.clone())
+        .build()
         .unwrap();
     assert_eq!(desk.options().pin_attempts, 3);
     let listed: Vec<String> = options
@@ -500,7 +531,7 @@ fn non_default_options_are_reported_not_refused() {
         .into_iter()
         .map(|w| w.setting)
         .collect();
-    assert_eq!(listed, ["pin_alphabet", "pin_attempts"]);
+    assert_eq!(listed, ["pin_alphabet.len", "pin_attempts"]);
     // The one NonDefault type of the crate root, with the default value beside the current one.
     let attempts = options
         .non_defaults()
@@ -510,12 +541,15 @@ fn non_default_options_are_reported_not_refused() {
         attempts,
         Some(coqui_peer::NonDefault::new("pin_attempts", "3", "1"))
     );
-    let meaningless = PairingOptions {
-        pin_attempts: 0,
-        ..PairingOptions::default()
+    let meaningless = {
+        let mut value = PairingOptions::default();
+        value.pin_attempts = 0;
+        value
     };
     assert!(matches!(
-        PairingDesk::new(counting(0)).with_options(meaningless),
+        PairingDesk::builder(counting(0))
+            .options(meaningless)
+            .build(),
         Err(Error::InvalidOptions)
     ));
 }
@@ -549,7 +583,7 @@ mod pin {
     ) -> Run {
         let responder_key = key(2);
         let joiner = Pairing::pin(pin.clone(), PinRole::Typed)
-            .with_random(counting(1))
+            .random(counting(1))
             .join(proven(joiner_key, &responder_key, b"bound"))
             .unwrap();
         let responder = PairingResponder::new(
@@ -602,14 +636,14 @@ mod pin {
     #[test]
     fn more_attempts_per_pin_is_an_option() {
         let world = fresh();
-        let desk = world
-            .desk
-            .clone()
-            .with_options(PairingOptions {
-                pin_attempts: 2,
-                ..PairingOptions::default()
+        let world = with_desk(world, |builder| {
+            builder.options({
+                let mut value = PairingOptions::default();
+                value.pin_attempts = 2;
+                value
             })
-            .unwrap();
+        });
+        let desk = world.desk.clone();
         let shown = desk.show_pin().unwrap();
         assert!(
             typed(&world, &wrong(&shown.pin), &key(1), untouched)
@@ -702,14 +736,13 @@ mod pin {
     #[test]
     fn a_responder_with_no_operator_refuses_a_joiner_showing_its_own_pin() {
         let world = fresh();
-        let desk = world
-            .desk
-            .clone()
-            .with_options(PairingOptions {
-                pin_shown: false,
-                ..PairingOptions::default()
+        let desk = desk_with(&world, |builder| {
+            builder.options({
+                let mut value = PairingOptions::default();
+                value.pin_shown = false;
+                value
             })
-            .unwrap();
+        });
         let pin = Pin::generate(&CodeAlphabet::pin(), &counting(40)).unwrap();
         let joiner = Pairing::pin(pin, PinRole::Shown)
             .join(proven(&key(1), &key(2), b""))
@@ -760,10 +793,14 @@ mod pin {
     #[test]
     fn pin_runs_are_throttled_per_source() {
         let world = fresh();
-        let desk = world.desk.clone().with_limits(DeskLimits {
-            pin_runs_per_source: 2,
-            ..DeskLimits::default()
+        let world = with_desk(world, |builder| {
+            builder.limits({
+                let mut value = DeskLimits::default();
+                value.pin_runs_per_source = 2;
+                value
+            })
         });
+        let desk = world.desk.clone();
         for attempt in 0..3 {
             desk.show_pin().unwrap();
             let pin = Pin::parse(&CodeAlphabet::pin(), "999999").unwrap();
@@ -836,7 +873,7 @@ fn vector_runs() -> Vec<(&'static str, Run)> {
         let world = fresh();
         let shown = world.desk.show_pin().unwrap();
         let joiner = Pairing::pin(shown.pin, PinRole::Typed)
-            .with_random(counting(1))
+            .random(counting(1))
             .join(proven(&key(1), &key(2), b"bound"))
             .unwrap();
         let responder = PairingResponder::new(
@@ -853,7 +890,7 @@ fn vector_runs() -> Vec<(&'static str, Run)> {
         let world = fresh();
         let pin = Pin::parse(&CodeAlphabet::pin(), "482913").unwrap();
         let joiner = Pairing::pin(pin, PinRole::Shown)
-            .with_random(counting(1))
+            .random(counting(1))
             .join(plain(&key(1)))
             .unwrap();
         let responder = PairingResponder::new(plain(&key(2)), &world.store, &world.desk, None);
@@ -903,15 +940,14 @@ fn a_tiny_user_code_alphabet_runs_out_instead_of_spinning() {
         out.copy_from_slice(&value.to_be_bytes()[..out.len()]);
         Ok(())
     });
-    let desk = PairingDesk::new(stepping)
-        .with_clock(world.hand.clock())
-        .with_options(PairingOptions {
-            user_code_alphabet: CodeAlphabet {
-                chars: "AB".to_owned(),
-                len: 1,
-            },
-            ..PairingOptions::default()
+    let desk = PairingDesk::builder(stepping)
+        .clock(world.hand.clock())
+        .options({
+            let mut value = PairingOptions::default();
+            value.user_code_alphabet = CodeAlphabet::new("AB", 1);
+            value
         })
+        .build()
         .unwrap();
     let mut held = Vec::new();
     for seed in 10..12 {
@@ -1011,9 +1047,12 @@ fn a_stalled_exchange_ends_at_its_deadline_and_frees_its_code() {
 #[test]
 fn pending_exchanges_are_bounded_per_source_in_every_mode() {
     let world = fresh();
-    let desk = world.desk.clone().with_limits(DeskLimits {
-        pending_per_source: 2,
-        ..DeskLimits::default()
+    let desk = desk_with(&world, |builder| {
+        builder.limits({
+            let mut value = DeskLimits::default();
+            value.pending_per_source = 2;
+            value
+        })
     });
     let from = |address: &str| Some(address.parse().unwrap());
     let mut held = Vec::new();
@@ -1135,15 +1174,14 @@ fn a_label_or_code_that_could_read_as_another_is_refused_on_receipt() {
 #[test]
 fn ttls_of_duration_max_mean_never_and_do_not_overflow() {
     let world = fresh();
-    let desk = world
-        .desk
-        .clone()
-        .with_options(PairingOptions {
-            pin_ttl: Duration::MAX,
-            device_ttl: Duration::MAX,
-            ..PairingOptions::default()
+    let desk = desk_with(&world, |builder| {
+        builder.options({
+            let mut value = PairingOptions::default();
+            value.pin_ttl = Duration::MAX;
+            value.device_ttl = Duration::MAX;
+            value
         })
-        .unwrap();
+    });
     let shown = desk.show_pin().unwrap();
     assert!(shown.expires > UNIX_EPOCH + Duration::from_secs(T0 + 365 * 86_400));
     let mut responder =
@@ -1165,7 +1203,7 @@ fn a_decided_slot_is_listed_and_taken_no_more() {
     let world = fresh();
     let pin = Pin::parse(&CodeAlphabet::pin(), "482913").unwrap();
     let mut joiner = Pairing::pin(pin, PinRole::Shown)
-        .with_random(counting(1))
+        .random(counting(1))
         .join(proven(&key(1), &key(2), b""))
         .unwrap();
     let mut responder = PairingResponder::new(
@@ -1216,14 +1254,16 @@ fn debug_output_shows_no_binding_secret_or_pin() {
 #[test]
 #[allow(deprecated)]
 fn the_old_names_answer_the_new_ones() {
-    let options = PairingOptions {
-        pin_attempts: 3,
-        ..PairingOptions::default()
+    let options = {
+        let mut value = PairingOptions::default();
+        value.pin_attempts = 3;
+        value
     };
     assert_eq!(options.weakened(), options.non_defaults());
-    let limits = DeskLimits {
-        pending: 64,
-        ..DeskLimits::default()
+    let limits = {
+        let mut value = DeskLimits::default();
+        value.pending = 64;
+        value
     };
     assert_eq!(limits.weakened(), limits.non_defaults());
     let old: coqui_peer::Weakening = coqui_peer::Weakening::new("pin_attempts", "3", "1");

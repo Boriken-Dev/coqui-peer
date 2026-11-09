@@ -18,9 +18,10 @@ use crate::error::Error;
 use crate::file::{self, Access};
 use crate::id::PeerId;
 use crate::key::KeyMaterial;
+use crate::non_default::NonDefault;
 use crate::pem;
 use crate::random::Random;
-use crate::waiting::{WaitingQueue, WhenFull};
+use crate::waiting::{WaitingQueue, WaitingSettings, WhenFull};
 
 /// The version of the on-disk format [`TrustStore`] writes and reads.
 pub const FORMAT_VERSION: u32 = 1;
@@ -37,26 +38,25 @@ pub(crate) const DEFAULT_IPV6_PREFIX: u8 = 64;
 
 /// Bounds on the waiting queue.
 ///
-/// With the `guatiao` feature the bounds are a guatiao value: every key is optional (an absent one
-/// is its default) and an unknown key is refused. `rerecord` is a duration: a number of seconds,
-/// `[secs, nanos]` or `{secs, nanos}`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    feature = "guatiao",
-    derive(guatiao::ToValue, guatiao::FromValue, guatiao::Schema),
-    map(deny_unknown_fields)
+/// A guatiao value: every key is optional (an absent one is its default) and an unknown key is
+/// refused. `rerecord` is a duration: a number of seconds, `[secs, nanos]` or `{secs, nanos}`. The
+/// struct is `#[non_exhaustive]`: start from [`Default`] and assign the fields.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
 )]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct WaitingLimits {
     /// Entries one source may hold; past it, a newcomer is refused unless the store says otherwise
-    /// ([`TrustStore::with_when_full`]). A source is an IPv4 address, or an IPv6 prefix
-    /// ([`TrustStore::with_ipv6_prefix`], /64 by default).
-    #[cfg_attr(feature = "guatiao", map(default = WaitingLimits::default().per_source))]
+    /// ([`WhenFull`]). A source is an IPv4 address, or an IPv6 prefix
+    /// (/64 by default).
+    #[map(default = WaitingLimits::default().per_source)]
     pub per_source: usize,
     /// Entries the whole directory may hold; past it nothing is recorded.
-    #[cfg_attr(feature = "guatiao", map(default = WaitingLimits::default().total))]
+    #[map(default = WaitingLimits::default().total)]
     pub total: usize,
     /// How long the same peer from the same source is not recorded again.
-    #[cfg_attr(feature = "guatiao", map(default = WaitingLimits::default().rerecord))]
+    #[map(default = WaitingLimits::default().rerecord)]
     pub rerecord: Duration,
 }
 
@@ -71,16 +71,26 @@ impl Default for WaitingLimits {
 }
 
 /// How an accepted peer's key is replaced by its successor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// A guatiao value like [`WaitingLimits`]; `retire_after` is a duration. `#[non_exhaustive]`:
+/// start from [`Default`] and assign the fields.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, guatiao::ToValue, guatiao::FromValue, guatiao::Schema,
+)]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct RotationOptions {
     /// How long the old key stays accepted once its successor is promoted. Default 24 hours.
+    #[map(default = RotationOptions::default().retire_after)]
     pub retire_after: Duration,
     /// Whether a successor waits for [`TrustStore::promote_successor`] instead of being
     /// promoted by the method the first time the peer proves it. Default `false`.
+    #[map(default = RotationOptions::default().require_approval)]
     pub require_approval: bool,
     /// Whether [`TrustStore::promote_successor`] promotes a successor nobody proved
     /// ([`TrustStore::prove_successor`]): the old key's holder then vouches alone for a key
     /// that may not be its own. Default `false`.
+    #[map(default = RotationOptions::default().allow_unproven)]
     pub allow_unproven: bool,
 }
 
@@ -96,6 +106,7 @@ impl Default for RotationOptions {
 
 /// How [`TrustStore::invite`] makes an invitation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InvitationOptions {
     /// How long the invitation can be redeemed, in whole seconds. Default 24 hours; zero is an
     /// error.
@@ -115,6 +126,7 @@ impl Default for InvitationOptions {
 
 /// A peer waiting for acceptance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct WaitingEntry {
     /// The peer's id.
     pub id: PeerId,
@@ -174,6 +186,7 @@ impl FromStr for InvitationId {
 /// The store keeps only the [`id`](Invitation::id), never the secret: the caller hands the
 /// secret to the joiner (a link or QR code, with the inviter's id). `Debug` does not show it.
 #[derive(Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Invitation {
     /// The secret, 32 random bytes.
     pub secret: [u8; 32],
@@ -213,6 +226,7 @@ impl fmt::Debug for Invitation {
 
 /// An open invitation, as listed: everything but the secret.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InvitationEntry {
     /// Its id.
     pub id: InvitationId,
@@ -227,6 +241,7 @@ pub struct InvitationEntry {
 /// A pending successor: `new` was announced by the peer accepted as `old`, and is accepted once
 /// the peer proves it (or the caller promotes it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Successor {
     /// The accepted key that announced it.
     pub old: PeerId,
@@ -238,6 +253,7 @@ pub struct Successor {
 
 /// An accepted key with a retirement time: it is refused from `retires` on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Retiring {
     /// The retiring key.
     pub id: PeerId,
@@ -347,73 +363,155 @@ struct Entry {
     proven: Option<u64>,
 }
 
+/// What a [`TrustStore`] is built from, besides the directory and the clock, in the form a
+/// file, a form or a peer fills.
+///
+/// Every key is optional (an absent one is its default) and an unknown key is refused. The type
+/// is a guatiao value (`from_value`, `to_value`, `schema`), and `guatiao_serde::text` reads and
+/// writes its text. It is `#[non_exhaustive]`: start from [`Default`] and assign the fields.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    guatiao::ToValue,
+    guatiao::FromValue,
+    guatiao::Schema,
+)]
+#[map(deny_unknown_fields)]
+#[non_exhaustive]
+pub struct TrustStoreSettings {
+    /// The waiting queue: its limits, how sources are grouped and what a full source does.
+    #[map(default = TrustStoreSettings::default().waiting)]
+    pub waiting: WaitingSettings,
+    /// How an accepted peer's key is replaced by its successor.
+    #[map(default = TrustStoreSettings::default().rotation)]
+    pub rotation: RotationOptions,
+}
+
+impl TrustStoreSettings {
+    /// Every setting that differs from its default, named by key path (`waiting.limits.total`).
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
+        NonDefault::of_settings(self)
+    }
+}
+
+/// Builds a [`TrustStore`]: [`TrustStore::builder`], the settings, then [`build`](Self::build).
+#[derive(Debug, Clone)]
+#[must_use]
+pub struct TrustStoreBuilder {
+    state_dir: PathBuf,
+    settings: TrustStoreSettings,
+    clock: Clock,
+}
+
+impl TrustStoreBuilder {
+    /// The bounds on the waiting queue. Default 16 per source, 1000 in all, 60 seconds.
+    pub fn limits(mut self, limits: WaitingLimits) -> Self {
+        self.settings.waiting.limits = limits;
+        self
+    }
+
+    /// Group IPv6 sources by their first `bits` bits for the per-source limits. Default 64. 128
+    /// counts each address alone, which lets the holder of a subnet fill the queue; values above
+    /// 128 are 128. IPv4 sources, IPv4-mapped IPv6 ones included, always count per address.
+    pub fn ipv6_prefix(mut self, bits: u8) -> Self {
+        self.settings.waiting.ipv6_prefix = bits;
+        self
+    }
+
+    /// What a newcomer to a full source gets. Default [`WhenFull::Refuse`], so that strangers
+    /// sharing a source cannot flush those already waiting.
+    pub fn when_full(mut self, when_full: WhenFull) -> Self {
+        self.settings.waiting.when_full = when_full;
+        self
+    }
+
+    /// Record a new peer from one source at most once per `interval`, each record being a synced
+    /// write a stranger can cause. Default one second; zero is no limit.
+    pub fn record_interval(mut self, interval: Duration) -> Self {
+        self.settings.waiting.record_interval = interval;
+        self
+    }
+
+    /// How keys are rotated. Default 24 hours, promoted automatically.
+    pub fn rotation(mut self, options: RotationOptions) -> Self {
+        self.settings.rotation = options;
+        self
+    }
+
+    /// The clock invitation expiry and key retirement read. Default the system clock.
+    pub fn clock(mut self, clock: Clock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// Every setting from `settings`. Replaces the limits, the grouping, the full-source
+    /// behaviour, the record interval and the rotation set before, and is replaced by what is set
+    /// after it. The clock is code, not a setting, and stays.
+    pub fn settings(mut self, settings: TrustStoreSettings) -> Self {
+        self.settings = settings;
+        self
+    }
+
+    /// Opens the store (creating the directories when absent).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Io`] when the directories cannot be created.
+    pub fn build(self) -> Result<TrustStore, Error> {
+        let root = self.state_dir.join("peers");
+        fs::create_dir_all(root.join("accepted")).map_err(Error::Io)?;
+        fs::create_dir_all(root.join("waiting")).map_err(Error::Io)?;
+        Ok(TrustStore {
+            root,
+            waiting: Arc::new(Mutex::new(
+                WaitingQueue::builder(self.settings.waiting.limits)
+                    .settings(self.settings.waiting)
+                    .build(),
+            )),
+            events: Arc::default(),
+            clock: self.clock,
+            rotation: self.settings.rotation,
+        })
+    }
+}
+
 impl TrustStore {
-    /// Opens (creating when absent) the store under `<state_dir>/peers`.
+    /// A builder for the store under `<state_dir>/peers`, with every setting at its default and
+    /// the system clock.
+    pub fn builder(state_dir: &Path) -> TrustStoreBuilder {
+        TrustStoreBuilder {
+            state_dir: state_dir.to_path_buf(),
+            settings: TrustStoreSettings::default(),
+            clock: Clock::system(),
+        }
+    }
+
+    /// Opens (creating when absent) the store under `<state_dir>/peers` with every setting at its
+    /// default: `TrustStore::builder(state_dir).build()`.
     ///
     /// # Errors
     ///
     /// [`Error::Io`] when the directories cannot be created.
     pub fn open(state_dir: &Path) -> Result<Self, Error> {
-        let root = state_dir.join("peers");
-        fs::create_dir_all(root.join("accepted")).map_err(Error::Io)?;
-        fs::create_dir_all(root.join("waiting")).map_err(Error::Io)?;
-        Ok(Self {
-            root,
-            waiting: Arc::new(Mutex::new(WaitingQueue::new(WaitingLimits::default()))),
-            events: Arc::default(),
-            clock: Clock::system(),
-            rotation: RotationOptions::default(),
-        })
+        Self::builder(state_dir).build()
     }
 
-    /// This store with other bounds on its waiting queue (the default: 16 per source, 1000 in
-    /// all, 60 seconds).
+    /// This store with other bounds on its waiting queue, which starts empty.
+    #[deprecated(note = "use `TrustStore::builder(dir).limits(limits)`")]
     #[must_use]
-    pub fn with_limits(mut self, limits: WaitingLimits) -> Self {
-        let (prefix, when_full, interval) = {
-            let queue = self.queue();
-            (
-                queue.ipv6_prefix(),
-                queue.when_full(),
-                queue.record_interval(),
-            )
-        };
-        self.waiting = Arc::new(Mutex::new(
-            WaitingQueue::new(limits)
-                .with_ipv6_prefix(prefix)
-                .with_when_full(when_full)
-                .with_record_interval(interval),
-        ));
-        self
+    pub fn with_limits(self, limits: WaitingLimits) -> Self {
+        self.reconfigured(|settings| settings.waiting.limits = limits)
     }
 
-    /// This store doing `when_full` with a newcomer to a full source; [`WhenFull::Refuse`] unless
-    /// set, so that strangers sharing a source cannot flush those already waiting.
+    /// This store with IPv6 sources grouped by their first `bits` bits; the queue starts empty.
+    #[deprecated(note = "use `TrustStore::builder(dir).ipv6_prefix(bits)`")]
     #[must_use]
-    pub fn with_when_full(mut self, when_full: WhenFull) -> Self {
-        let queue = self.queue().clone().with_when_full(when_full);
-        self.waiting = Arc::new(Mutex::new(queue));
-        self
-    }
-
-    /// This store recording a new peer from one source at most once per `interval`, each record
-    /// being a synced write a stranger can cause; one second unless set, and zero is no limit.
-    #[must_use]
-    pub fn with_record_interval(mut self, interval: Duration) -> Self {
-        let queue = self.queue().clone().with_record_interval(interval);
-        self.waiting = Arc::new(Mutex::new(queue));
-        self
-    }
-
-    /// This store with IPv6 sources grouped by their first `bits` bits for the per-source
-    /// limits (64 unless set). 128 counts each address alone, which lets the holder of a
-    /// subnet fill the queue; values above 128 are 128. IPv4 sources, IPv4-mapped IPv6 ones
-    /// included, always count per address.
-    #[must_use]
-    pub fn with_ipv6_prefix(mut self, bits: u8) -> Self {
-        let limits = self.queue().limits();
-        self.waiting = Arc::new(Mutex::new(WaitingQueue::new(limits).with_ipv6_prefix(bits)));
-        self
+    pub fn with_ipv6_prefix(self, bits: u8) -> Self {
+        self.reconfigured(|settings| settings.waiting.ipv6_prefix = bits)
     }
 
     /// The waiting queue's bounds and what this process recorded.
@@ -421,19 +519,46 @@ impl TrustStore {
         self.waiting.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// This store reading `clock` for invitation expiry and key retirement (the system clock
-    /// unless set).
+    /// This store under its settings changed by `change`, with a new empty waiting queue.
+    fn reconfigured(mut self, change: impl FnOnce(&mut TrustStoreSettings)) -> Self {
+        let mut settings = self.settings();
+        change(&mut settings);
+        self.waiting = Arc::new(Mutex::new(
+            WaitingQueue::builder(settings.waiting.limits)
+                .settings(settings.waiting)
+                .build(),
+        ));
+        self.rotation = settings.rotation;
+        self
+    }
+
+    /// This store reading `clock` for invitation expiry and key retirement.
+    #[deprecated(note = "use `TrustStore::builder(dir).clock(clock)`")]
     #[must_use]
     pub fn with_clock(mut self, clock: Clock) -> Self {
         self.clock = clock;
         self
     }
 
-    /// This store rotating keys by `options` (24 hours, automatic, unless set).
+    /// This store rotating keys by `options`.
+    #[deprecated(note = "use `TrustStore::builder(dir).rotation(options)`")]
     #[must_use]
     pub fn with_rotation(mut self, options: RotationOptions) -> Self {
         self.rotation = options;
         self
+    }
+
+    /// The settings it was built with.
+    pub fn settings(&self) -> TrustStoreSettings {
+        TrustStoreSettings {
+            waiting: self.queue().settings(),
+            rotation: self.rotation,
+        }
+    }
+
+    /// Every setting that differs from its default, named by key path.
+    pub fn non_defaults(&self) -> Vec<NonDefault> {
+        self.settings().non_defaults()
     }
 
     /// The rotation options in force.
@@ -566,12 +691,12 @@ impl TrustStore {
     ///
     /// Bounded: invalid keys are ignored; one source holds at most
     /// [`per_source`](WaitingLimits::per_source) entries, a newcomer being refused
-    /// ([`with_when_full`](TrustStore::with_when_full)); it records a new peer at most once per
-    /// [`with_record_interval`](TrustStore::with_record_interval); the same
+    /// ([`WhenFull`]); it records a new peer at most once per
+    /// [`record_interval`](TrustStoreBuilder::record_interval); the same
     /// peer from the same source is recorded at most once per
     /// [`rerecord`](WaitingLimits::rerecord); the directory holds at most
     /// [`total`](WaitingLimits::total). A source is an IPv4 address (IPv4-mapped IPv6 included)
-    /// or an IPv6 prefix of [`with_ipv6_prefix`](TrustStore::with_ipv6_prefix) bits, /64 by
+    /// or an IPv6 prefix of [`ipv6_prefix`](TrustStoreBuilder::ipv6_prefix) bits, /64 by
     /// default. The full `source` address is stored with the entry. `None` is the source of
     /// callers that do not know it, which share one bucket.
     pub fn record_waiting(&self, key: &KeyMaterial, source: Option<SocketAddr>) {

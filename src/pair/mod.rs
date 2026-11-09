@@ -35,8 +35,8 @@ use zeroize::Zeroizing;
 
 pub use code::{CodeAlphabet, PairingCode, Pin, UserCode};
 pub use desk::{
-    Decided, Decision, DeskLimits, PairingDesk, PairingOptions, PendingDevice, PendingSlot,
-    ShownPin, Ticket,
+    Decided, Decision, DeskLimits, PairingDesk, PairingDeskBuilder, PairingDeskSettings,
+    PairingOptions, PendingDevice, PendingSlot, ShownPin, Ticket,
 };
 
 use crate::clock::{from_unix_seconds, later, unix_seconds};
@@ -235,6 +235,7 @@ pub enum Shown {
 
 /// A successful pairing: the other side's key, now to be trusted.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Paired {
     /// The other side's key. A responder has accepted it in its store; a joiner's caller
     /// stores it.
@@ -292,7 +293,7 @@ impl Pairing {
     /// Pairs with a PIN: the one the responder shows and a person typed here
     /// ([`PinRole::Typed`]), or this joiner's own, which it shows with the slot the responder
     /// assigns ([`PinRole::Shown`]). The PAKE draws from the operating system's generator
-    /// unless [`with_random`](Pairing::with_random) gives another.
+    /// unless [`random`](Pairing::random) gives another.
     #[cfg(feature = "pin")]
     pub fn pin(pin: Pin, role: PinRole) -> Self {
         Self::of(Kind::Pin { pin, role })
@@ -337,9 +338,17 @@ impl Pairing {
     /// The PAKE's random source, instead of the operating system's.
     #[cfg(feature = "pin")]
     #[must_use]
-    pub fn with_random(mut self, random: Random) -> Self {
+    pub fn random(mut self, random: Random) -> Self {
         self.random = Some(random);
         self
+    }
+
+    /// The PAKE's random source, instead of the operating system's.
+    #[cfg(feature = "pin")]
+    #[deprecated(note = "renamed to `random`")]
+    #[must_use]
+    pub fn with_random(self, random: Random) -> Self {
+        self.random(random)
     }
 
     /// The mode.

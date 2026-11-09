@@ -9,9 +9,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use coqui_peer::{
-    Clock, InvitationOptions, KeyMaterial, PeerId, Random, Retiring, Successor, TrustStore,
-};
+use coqui_peer::{Clock, InvitationOptions, KeyMaterial, PeerId, Random, TrustStore};
 
 fn vectors() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors")
@@ -81,11 +79,12 @@ fn third_example_key() -> KeyMaterial {
 }
 
 fn store_at(directory: &Path, seconds: u64) -> TrustStore {
-    TrustStore::open(directory)
-        .unwrap()
-        .with_clock(Clock::from_fn(move || {
+    TrustStore::builder(directory)
+        .clock(Clock::from_fn(move || {
             UNIX_EPOCH + Duration::from_secs(seconds)
         }))
+        .build()
+        .unwrap()
 }
 
 /// Writes the store tree: certificate A with B announced as its pending successor, an example
@@ -109,9 +108,10 @@ fn write_store(directory: &Path) {
         out.copy_from_slice(&secret()[..out.len()]);
         Ok(())
     });
-    let options = InvitationOptions {
-        uses: 2,
-        ..InvitationOptions::default()
+    let options = {
+        let mut value = InvitationOptions::default();
+        value.uses = 2;
+        value
     };
     store.invite(&random, options, "kitchen tablet").unwrap();
 }
@@ -172,22 +172,28 @@ fn the_committed_store_reads_back() {
     assert!(!store.is_accepted(&b.id()));
     assert_eq!(store.successor_key(&b.id()), Some(b.clone()));
     assert_eq!(
-        store.successors().unwrap(),
-        [Successor {
-            old: a.id(),
-            new: b.id(),
-            proven: None,
-        }]
+        store
+            .successors()
+            .unwrap()
+            .iter()
+            .map(|successor| (successor.old, successor.new, successor.proven))
+            .collect::<Vec<_>>(),
+        [(a.id(), b.id(), None)]
     );
     assert_eq!(store.accepted_key(&one.id()), Some(one.clone()));
     assert!(store.is_accepted(&two.id()));
     assert_eq!(
-        store.retiring().unwrap(),
-        [Retiring {
-            id: one.id(),
-            successor: Some(two.id()),
-            retires: UNIX_EPOCH + Duration::from_secs(retires)
-        }]
+        store
+            .retiring()
+            .unwrap()
+            .iter()
+            .map(|retiring| (retiring.id, retiring.successor, retiring.retires))
+            .collect::<Vec<_>>(),
+        [(
+            one.id(),
+            Some(two.id()),
+            UNIX_EPOCH + Duration::from_secs(retires)
+        )]
     );
     let waiting = store.waiting().unwrap();
     assert_eq!(waiting.len(), 1);

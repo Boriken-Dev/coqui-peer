@@ -15,21 +15,33 @@ fn from(text: &str) -> Option<SocketAddr> {
 }
 
 fn limits(per_source: usize, total: usize) -> WaitingLimits {
-    WaitingLimits {
-        per_source,
-        total,
-        rerecord: Duration::from_secs(60),
+    {
+        let mut value = WaitingLimits::default();
+        value.per_source = per_source;
+        value.total = total;
+        value.rerecord = Duration::from_secs(60);
+        value
     }
 }
 
 /// A queue with no rate limit, as most of these tests record in one instant.
 fn unpaced(limits: WaitingLimits) -> WaitingQueue {
-    WaitingQueue::new(limits).with_record_interval(Duration::ZERO)
+    WaitingQueue::builder(limits)
+        .record_interval(Duration::ZERO)
+        .build()
 }
 
 /// A queue that replaces, the behaviour some of these tests are about.
 fn replacing(limits: WaitingLimits) -> WaitingQueue {
-    unpaced(limits).with_when_full(WhenFull::ReplaceOldest)
+    replacing_by(limits, 64)
+}
+
+fn replacing_by(limits: WaitingLimits, prefix: u8) -> WaitingQueue {
+    WaitingQueue::builder(limits)
+        .record_interval(Duration::ZERO)
+        .when_full(WhenFull::ReplaceOldest)
+        .ipv6_prefix(prefix)
+        .build()
 }
 
 #[test]
@@ -147,7 +159,7 @@ fn ipv6_sources_count_by_prefix_and_mapped_ipv4_by_address() {
         [id(3)]
     );
     // Grouped by /128, each IPv6 address is a source of its own.
-    let mut exact = replacing(limits(1, 100)).with_ipv6_prefix(200);
+    let mut exact = replacing_by(limits(1, 100), 200);
     assert_eq!(exact.ipv6_prefix(), 128);
     assert!(exact.admit(id(1), from("[2001:db8::1]:1"), 0, now).record);
     assert!(
