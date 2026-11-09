@@ -16,13 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- **Breaking:** the `with_` setters are named for their setting and live on builders. `TrustStore::with_limits`, `with_ipv6_prefix`, `with_clock` and `with_rotation`, `WaitingQueue::with_ipv6_prefix`, `PairingDesk::with_options`, `with_limits` and `with_clock` and `Pairing::with_random` stay one release as `#[deprecated]` wrappers; `with_when_full` and `with_record_interval` were never released and are gone, as the builders' `when_full` and `record_interval`.
+- **Breaking:** the `with_` setters are named for their setting and live on builders; the old names are gone, as nothing keeps an alias before a release without a pre-release tag. `TrustStore::with_limits` and `with_ipv6_prefix` are `TrustStore::builder(dir).limits(..)` / `.ipv6_prefix(..)`, or `TrustStore::waiting_queue(settings)` on a store that exists; `with_clock` and `with_rotation` are the builder's `clock` and `rotation`; `WaitingQueue::with_ipv6_prefix`, `PairingDesk::with_options`, `with_limits` and `with_clock` are the builders' setters; `Pairing::with_random` is `random`. `with_when_full` and `with_record_interval` are the builders' `when_full` and `record_interval`.
 - **Breaking:** `WaitingLimits`, `RotationOptions`, `InvitationOptions`, `pair::{PairingOptions, DeskLimits, CodeAlphabet}`, `Paired`, `ShownPin`, `PendingSlot`, `PendingDevice`, `WaitingEntry`, `InvitationEntry`, `Invitation`, `Successor` and `Retiring` are `#[non_exhaustive]`: start from `Default` and assign the fields (`CodeAlphabet::new(chars, len)`).
 - **Breaking:** `PairingOptions::non_defaults` and `DeskLimits::non_defaults` list every option that differs from its default, not only the looser ones, and name it by key path (`pin_alphabet.len`, was `pin_alphabet`, whose value was the number of combinations).
 - **Breaking: a weakened setting is a non-default setting.** `Weakening { setting, value, strict }` is now
   `NonDefault { setting, value, default }`, and `PairingOptions::weakened` and `DeskLimits::weakened` are
-  `non_defaults`. `Weakening` (now an alias of `NonDefault`, so a struct literal naming `strict` no longer
-  compiles) and the two `weakened` methods stay one release as deprecated aliases. A library lists
+  `non_defaults`; the old names are gone. A library lists
   settings and logs them at `debug` at most; the application that knows the use case decides what they mean.
 - A source at `WaitingLimits::per_source` now refuses a newcomer instead of replacing its oldest
   entry, in `TrustStore::record_waiting` and `WaitingQueue::admit`: strangers sharing a source, as

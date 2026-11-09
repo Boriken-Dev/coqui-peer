@@ -152,24 +152,12 @@ impl PairingOptions {
     pub fn non_defaults(&self) -> Vec<NonDefault> {
         NonDefault::of_settings(self)
     }
-
-    /// The old name of [`non_defaults`](PairingOptions::non_defaults).
-    #[deprecated(note = "renamed to `non_defaults`")]
-    pub fn weakened(&self) -> Vec<NonDefault> {
-        self.non_defaults()
-    }
 }
 
 impl DeskLimits {
     /// Every limit that differs from its default, named by key path.
     pub fn non_defaults(&self) -> Vec<NonDefault> {
         NonDefault::of_settings(self)
-    }
-
-    /// The old name of [`non_defaults`](DeskLimits::non_defaults).
-    #[deprecated(note = "renamed to `non_defaults`")]
-    pub fn weakened(&self) -> Vec<NonDefault> {
-        self.non_defaults()
     }
 }
 
@@ -515,34 +503,6 @@ impl PairingDesk {
             .state
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// This desk with `options`; it applies to every clone.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::InvalidOptions`] as [`PairingOptions::check`].
-    #[deprecated(note = "use `PairingDesk::builder(random).options(options)`")]
-    pub fn with_options(self, options: PairingOptions) -> Result<Self, Error> {
-        options.check()?;
-        self.state().options = options;
-        Ok(self)
-    }
-
-    /// This desk with `limits`; it applies to every clone.
-    #[deprecated(note = "use `PairingDesk::builder(random).limits(limits)`")]
-    #[must_use]
-    pub fn with_limits(self, limits: DeskLimits) -> Self {
-        self.state().limits = limits;
-        self
-    }
-
-    /// This desk reading `clock`; it applies to every clone.
-    #[deprecated(note = "use `PairingDesk::builder(random).clock(clock)`")]
-    #[must_use]
-    pub fn with_clock(self, clock: Clock) -> Self {
-        self.state().clock = clock;
-        self
     }
 
     /// The settings in force.

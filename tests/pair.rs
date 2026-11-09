@@ -1250,22 +1250,3 @@ fn debug_output_shows_no_binding_secret_or_pin() {
         .unwrap();
     assert!(!format!("{invitation:?}").contains("171"));
 }
-
-#[test]
-#[allow(deprecated)]
-fn the_old_names_answer_the_new_ones() {
-    let options = {
-        let mut value = PairingOptions::default();
-        value.pin_attempts = 3;
-        value
-    };
-    assert_eq!(options.weakened(), options.non_defaults());
-    let limits = {
-        let mut value = DeskLimits::default();
-        value.pending = 64;
-        value
-    };
-    assert_eq!(limits.weakened(), limits.non_defaults());
-    let old: coqui_peer::Weakening = coqui_peer::Weakening::new("pin_attempts", "3", "1");
-    assert_eq!(old.default, "1");
-}

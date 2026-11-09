@@ -185,20 +185,6 @@ impl WaitingQueue {
         Self::builder(limits).build()
     }
 
-    /// This queue grouping IPv6 sources by their first `bits` bits (values above 128 are 128).
-    #[deprecated(note = "use `WaitingQueue::builder(limits).ipv6_prefix(bits)`")]
-    #[must_use]
-    pub fn with_ipv6_prefix(self, bits: u8) -> Self {
-        self.rebuilt(|settings| settings.ipv6_prefix = bits)
-    }
-
-    /// An empty queue under these settings changed by `change`.
-    fn rebuilt(self, change: impl FnOnce(&mut WaitingSettings)) -> Self {
-        let mut settings = self.settings;
-        change(&mut settings);
-        Self::builder(settings.limits).settings(settings).build()
-    }
-
     /// The settings it was built from.
     pub fn settings(&self) -> WaitingSettings {
         self.settings

@@ -40,8 +40,6 @@ pub use id::{Digest, PeerId};
 pub use key::{KeyMaterial, MAX_KEY_BYTES};
 pub use method::{Established, Framing, Handshake, Method};
 pub use non_default::NonDefault;
-#[allow(deprecated)]
-pub use non_default::Weakening;
 pub use random::Random;
 pub use store::{
     FORMAT_VERSION, Invitation, InvitationEntry, InvitationId, InvitationOptions, MAX_LABEL,

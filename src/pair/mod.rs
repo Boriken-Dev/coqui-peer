@@ -343,14 +343,6 @@ impl Pairing {
         self
     }
 
-    /// The PAKE's random source, instead of the operating system's.
-    #[cfg(feature = "pin")]
-    #[deprecated(note = "renamed to `random`")]
-    #[must_use]
-    pub fn with_random(self, random: Random) -> Self {
-        self.random(random)
-    }
-
     /// The mode.
     pub fn mode(&self) -> Mode {
         match self.kind {

@@ -91,7 +91,3 @@ fn render(value: Option<&Value>) -> String {
             .unwrap_or_else(|_| "unrepresentable".to_string())
     })
 }
-
-/// The old name of [`NonDefault`], whose `strict` field is now `default`.
-#[deprecated(note = "renamed to `NonDefault`; its `strict` field is now `default`")]
-pub type Weakening = NonDefault;

@@ -500,18 +500,11 @@ impl TrustStore {
         Self::builder(state_dir).build()
     }
 
-    /// This store with other bounds on its waiting queue, which starts empty.
-    #[deprecated(note = "use `TrustStore::builder(dir).limits(limits)`")]
+    /// This store with a new, empty waiting queue under `settings`, the replacement for the queue it
+    /// was built with. Rotation and the clock stay.
     #[must_use]
-    pub fn with_limits(self, limits: WaitingLimits) -> Self {
-        self.reconfigured(|settings| settings.waiting.limits = limits)
-    }
-
-    /// This store with IPv6 sources grouped by their first `bits` bits; the queue starts empty.
-    #[deprecated(note = "use `TrustStore::builder(dir).ipv6_prefix(bits)`")]
-    #[must_use]
-    pub fn with_ipv6_prefix(self, bits: u8) -> Self {
-        self.reconfigured(|settings| settings.waiting.ipv6_prefix = bits)
+    pub fn waiting_queue(self, settings: WaitingSettings) -> Self {
+        self.reconfigured(|current| current.waiting = settings)
     }
 
     /// The waiting queue's bounds and what this process recorded.
@@ -529,22 +522,6 @@ impl TrustStore {
                 .build(),
         ));
         self.rotation = settings.rotation;
-        self
-    }
-
-    /// This store reading `clock` for invitation expiry and key retirement.
-    #[deprecated(note = "use `TrustStore::builder(dir).clock(clock)`")]
-    #[must_use]
-    pub fn with_clock(mut self, clock: Clock) -> Self {
-        self.clock = clock;
-        self
-    }
-
-    /// This store rotating keys by `options`.
-    #[deprecated(note = "use `TrustStore::builder(dir).rotation(options)`")]
-    #[must_use]
-    pub fn with_rotation(mut self, options: RotationOptions) -> Self {
-        self.rotation = options;
         self
     }
 

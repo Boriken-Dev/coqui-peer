@@ -87,7 +87,6 @@ pub coqui_peer::pair::DeskLimits::wrong_codes_per_approver: usize
 pub coqui_peer::pair::DeskLimits::wrong_codes_total: usize
 impl coqui_peer::pair::DeskLimits
 pub fn coqui_peer::pair::DeskLimits::non_defaults(&self) -> alloc::vec::Vec<coqui_peer::NonDefault>
-pub fn coqui_peer::pair::DeskLimits::weakened(&self) -> alloc::vec::Vec<coqui_peer::NonDefault>
 impl core::default::Default for coqui_peer::pair::DeskLimits
 pub fn coqui_peer::pair::DeskLimits::default() -> Self
 #[non_exhaustive] pub struct coqui_peer::pair::Paired
@@ -104,7 +103,6 @@ pub fn coqui_peer::pair::Pairing::join(self, coqui_peer::pair::Channel) -> core:
 pub fn coqui_peer::pair::Pairing::mode(&self) -> coqui_peer::pair::Mode
 pub fn coqui_peer::pair::Pairing::pin(coqui_peer::pair::Pin, coqui_peer::pair::PinRole) -> Self
 pub fn coqui_peer::pair::Pairing::random(self, coqui_peer::Random) -> Self
-pub fn coqui_peer::pair::Pairing::with_random(self, coqui_peer::Random) -> Self
 impl core::fmt::Debug for coqui_peer::pair::Pairing
 pub fn coqui_peer::pair::Pairing::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
 pub struct coqui_peer::pair::PairingCode
@@ -129,9 +127,6 @@ pub fn coqui_peer::pair::PairingDesk::slots(&self) -> alloc::vec::Vec<coqui_peer
 pub fn coqui_peer::pair::PairingDesk::submit_code(&self, &coqui_peer::pair::PairingCode) -> core::result::Result<(), coqui_peer::pair::PairingError>
 pub fn coqui_peer::pair::PairingDesk::sweep(&self)
 pub fn coqui_peer::pair::PairingDesk::wait(&self, coqui_peer::pair::Ticket) -> coqui_peer::pair::Decision
-pub fn coqui_peer::pair::PairingDesk::with_clock(self, coqui_peer::Clock) -> Self
-pub fn coqui_peer::pair::PairingDesk::with_limits(self, coqui_peer::pair::DeskLimits) -> Self
-pub fn coqui_peer::pair::PairingDesk::with_options(self, coqui_peer::pair::PairingOptions) -> core::result::Result<Self, coqui_peer::Error>
 pub struct coqui_peer::pair::PairingDeskBuilder
 impl coqui_peer::pair::PairingDeskBuilder
 pub fn coqui_peer::pair::PairingDeskBuilder::build(self) -> core::result::Result<coqui_peer::pair::PairingDesk, coqui_peer::Error>
@@ -166,7 +161,6 @@ pub coqui_peer::pair::PairingOptions::user_code_alphabet: coqui_peer::pair::Code
 impl coqui_peer::pair::PairingOptions
 pub fn coqui_peer::pair::PairingOptions::check(&self) -> core::result::Result<(), coqui_peer::Error>
 pub fn coqui_peer::pair::PairingOptions::non_defaults(&self) -> alloc::vec::Vec<coqui_peer::NonDefault>
-pub fn coqui_peer::pair::PairingOptions::weakened(&self) -> alloc::vec::Vec<coqui_peer::NonDefault>
 impl core::default::Default for coqui_peer::pair::PairingOptions
 pub fn coqui_peer::pair::PairingOptions::default() -> Self
 pub struct coqui_peer::pair::PairingResponder
@@ -448,10 +442,7 @@ pub fn coqui_peer::TrustStore::successors(&self) -> core::result::Result<alloc::
 pub fn coqui_peer::TrustStore::take_rotation_events(&self) -> alloc::vec::Vec<coqui_peer::RotationEvent>
 pub fn coqui_peer::TrustStore::waiting(&self) -> core::result::Result<alloc::vec::Vec<coqui_peer::WaitingEntry>, coqui_peer::Error>
 pub fn coqui_peer::TrustStore::waiting_key(&self, &coqui_peer::PeerId) -> core::option::Option<coqui_peer::KeyMaterial>
-pub fn coqui_peer::TrustStore::with_clock(self, coqui_peer::Clock) -> Self
-pub fn coqui_peer::TrustStore::with_ipv6_prefix(self, u8) -> Self
-pub fn coqui_peer::TrustStore::with_limits(self, coqui_peer::WaitingLimits) -> Self
-pub fn coqui_peer::TrustStore::with_rotation(self, coqui_peer::RotationOptions) -> Self
+pub fn coqui_peer::TrustStore::waiting_queue(self, coqui_peer::WaitingSettings) -> Self
 pub struct coqui_peer::TrustStoreBuilder
 impl coqui_peer::TrustStoreBuilder
 pub fn coqui_peer::TrustStoreBuilder::build(self) -> core::result::Result<coqui_peer::TrustStore, coqui_peer::Error>
@@ -491,7 +482,6 @@ pub fn coqui_peer::WaitingQueue::record_interval(&self) -> core::time::Duration
 pub fn coqui_peer::WaitingQueue::remember(&mut self, coqui_peer::PeerId, core::option::Option<core::net::socket_addr::SocketAddr>, std::time::Instant) -> alloc::vec::Vec<coqui_peer::PeerId>
 pub fn coqui_peer::WaitingQueue::settings(&self) -> coqui_peer::WaitingSettings
 pub fn coqui_peer::WaitingQueue::when_full(&self) -> coqui_peer::WhenFull
-pub fn coqui_peer::WaitingQueue::with_ipv6_prefix(self, u8) -> Self
 pub struct coqui_peer::WaitingQueueBuilder
 impl coqui_peer::WaitingQueueBuilder
 pub fn coqui_peer::WaitingQueueBuilder::build(self) -> coqui_peer::WaitingQueue
@@ -559,4 +549,3 @@ pub fn coqui_peer::drive_stream<H, T>(H, &mut T) -> core::result::Result<coqui_p
 pub fn coqui_peer::drive_stream_until<H, T>(H, &mut T, std::time::Instant) -> core::result::Result<coqui_peer::Established<<H as coqui_peer::Handshake>::Output>, coqui_peer::DriveError<<H as coqui_peer::Handshake>::Error>> where H: coqui_peer::Handshake, T: alloc::io::read::Read + core::io::write::Write + coqui_peer::ReadTimeout + coqui_peer::WriteTimeout
 pub fn coqui_peer::read_frame<R: alloc::io::read::Read + ?core::marker::Sized>(&mut R) -> core::io::error::Result<alloc::vec::Vec<u8>>
 pub fn coqui_peer::write_frame<W: core::io::write::Write + ?core::marker::Sized>(&mut W, &[u8]) -> core::io::error::Result<()>
-pub type coqui_peer::Weakening = coqui_peer::NonDefault

@@ -1,6 +1,5 @@
 //! Each builder setter reaches what it builds, `settings` takes the whole, the last setter wins,
-//! and the deprecated `with_` names build what the builders build.
-#![allow(deprecated)]
+//! and the store takes new waiting settings.
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -142,40 +141,19 @@ fn every_desk_setter_reaches_the_desk() {
 }
 
 #[test]
-fn the_deprecated_store_names_build_what_the_builder_builds() {
+fn a_store_takes_new_waiting_settings_with_an_empty_queue() {
     let directory = tempfile::tempdir().unwrap();
-    let old = TrustStore::open(directory.path())
-        .unwrap()
-        .with_limits(limits(3))
-        .with_ipv6_prefix(48)
-        .with_rotation(rotation());
-    let new = TrustStore::builder(directory.path())
+    let built = TrustStore::builder(directory.path())
         .limits(limits(3))
         .ipv6_prefix(48)
         .rotation(rotation())
         .build()
         .unwrap();
-    assert_eq!(old.settings(), new.settings());
-}
-
-#[test]
-fn the_deprecated_queue_and_desk_names_build_what_the_builders_build() {
-    let old = WaitingQueue::new(limits(3)).with_ipv6_prefix(48);
-    let new = WaitingQueue::builder(limits(3)).ipv6_prefix(48).build();
-    assert_eq!(old.settings(), new.settings());
-
-    let mut desk_limits = DeskLimits::default();
-    desk_limits.pending = 3;
-    let mut options = PairingOptions::default();
-    options.pin_attempts = 2;
-    let old = PairingDesk::new(random())
-        .with_options(options.clone())
-        .unwrap()
-        .with_limits(desk_limits);
-    let new = PairingDesk::builder(random())
-        .options(options)
-        .limits(desk_limits)
-        .build()
-        .unwrap();
-    assert_eq!(old.settings(), new.settings());
+    let mut settings = built.settings().waiting;
+    settings.limits = limits(5);
+    settings.ipv6_prefix = 56;
+    let replaced = built.waiting_queue(settings);
+    assert_eq!(replaced.settings().waiting, settings);
+    assert_eq!(replaced.settings().rotation, rotation());
+    assert!(replaced.waiting().unwrap().is_empty());
 }

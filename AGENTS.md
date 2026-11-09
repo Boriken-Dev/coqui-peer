@@ -85,8 +85,7 @@ impl TrustStore {
     pub fn builder(state_dir: &Path) -> TrustStoreBuilder;           // the same, with settings
     pub fn settings(&self) -> TrustStoreSettings;  pub fn non_defaults(&self) -> Vec<NonDefault>;
     pub fn rotation(&self) -> RotationOptions;   pub fn clock(&self) -> &Clock;
-    // Deprecated, one release: with_limits, with_ipv6_prefix, with_clock, with_rotation (each rebuilds a store; a
-    // with_limits or with_ipv6_prefix starts the waiting queue empty).
+    pub fn waiting_queue(self, WaitingSettings) -> TrustStore;        // a new, empty waiting queue; rotation and the clock stay
     pub fn waiting(&self) -> Result<Vec<WaitingEntry>, Error>;
     pub fn accepted(&self) -> Result<Vec<PeerId>, Error>;             // retired keys not listed
     pub fn accepted_key(&self, id: &PeerId) -> Option<KeyMaterial>;   // None once retired
@@ -155,7 +154,6 @@ impl WaitingQueue {
     pub fn builder(limits: WaitingLimits) -> WaitingQueueBuilder;   // IPv6 grouped by /64, Refuse, 1 s
     pub fn new(limits: WaitingLimits) -> WaitingQueue;          // builder(limits).build()
     pub fn settings(&self) -> WaitingSettings;
-    // Deprecated, one release: with_ipv6_prefix.
     pub fn when_full(&self) -> WhenFull;  pub fn record_interval(&self) -> Duration;
     pub fn limits(&self) -> WaitingLimits;  pub fn ipv6_prefix(&self) -> u8;
     pub fn admit(&mut self, id: PeerId, source: Option<SocketAddr>, stored: usize, now: Instant) -> Admission;
@@ -349,7 +347,6 @@ impl Pairing {
     pub fn device(label: &str) -> Pairing;
     pub fn allow_unverified(self, bool) -> Pairing;  pub fn allows_unverified(&self) -> bool;
     pub fn random(self, Random) -> Pairing;                         // feature pin; default Random::os()
-    // Deprecated, one release: with_random.
     pub fn mode(&self) -> Mode;  pub fn inviter(&self) -> Option<PeerId>;
     pub fn join(self, Channel) -> Result<PairingJoiner, PairingError>;
 }
@@ -378,7 +375,6 @@ impl PairingDesk {
                                                             // settings(PairingDeskSettings), build() -> Result<_, Error> (InvalidOptions)
     pub fn new(random: Random) -> PairingDesk;               // builder(random).build() with the defaults
     pub fn settings(&self) -> PairingDeskSettings;  pub fn non_defaults(&self) -> Vec<NonDefault>;
-    // Deprecated, one release: with_options, with_limits, with_clock (they change the desk and every clone).
     pub fn options(&self) -> PairingOptions;  pub fn limits(&self) -> DeskLimits;
     pub fn show_pin(&self) -> Result<ShownPin, Error>;    // replaces the shown one
     pub fn shown_pin(&self) -> Option<ShownPin>;  pub fn clear_pin(&self);
@@ -405,7 +401,6 @@ impl DeskLimits { pub fn non_defaults(&self) -> Vec<NonDefault>; }
 // by key path (`waiting.limits.per_source`), and of_settings_against(&T, &T) against another value;
 // NonDefault::from_difference(&guatiao::schema::Difference) renders one difference (text as text, else compact JSON, a
 // missing side `unset`).
-// Deprecated for one release: Weakening (an alias of NonDefault; its field `strict` is now `default`) and the `weakened()` methods.
 #[non_exhaustive] pub struct ShownPin { pub pin: Pin, pub expires: SystemTime }
 #[non_exhaustive] pub struct PendingSlot { pub slot: u8, pub peer: PeerId, pub source: Option<SocketAddr>, pub expires: SystemTime }
 #[non_exhaustive] pub struct PendingDevice { pub peer: PeerId, pub source: Option<SocketAddr>, pub label: String, pub expires: SystemTime }
