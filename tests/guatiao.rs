@@ -81,3 +81,45 @@ fn a_digest_is_its_lowercase_name() {
     assert_eq!(Digest::from_value(&value).unwrap(), Digest::Sha384);
     assert!(Digest::from_value(&"md5".to_value().unwrap()).is_err());
 }
+
+fn reported(limits: &WaitingLimits) -> Vec<coqui_peer::NonDefault> {
+    let schema = WaitingLimits::schema().unwrap();
+    let schema = guatiao::schema::SchemaRef::new(&schema).unwrap();
+    guatiao::schema::differences(schema, &limits.to_value().unwrap(), None, "***")
+        .unwrap()
+        .iter()
+        .map(coqui_peer::NonDefault::from_difference)
+        .collect()
+}
+
+#[test]
+fn the_defaults_report_nothing_and_each_changed_key_reports_itself() {
+    assert!(reported(&WaitingLimits::default()).is_empty());
+    let limits = WaitingLimits {
+        per_source: 4,
+        total: 2_000,
+        rerecord: Duration::from_secs(5),
+    };
+    assert_eq!(
+        reported(&limits),
+        [
+            coqui_peer::NonDefault::new("per_source", "4", "16"),
+            coqui_peer::NonDefault::new("rerecord", "[5,0]", "[60,0]"),
+            coqui_peer::NonDefault::new("total", "2000", "1000"),
+        ]
+    );
+}
+
+#[test]
+fn a_text_value_is_its_text_and_a_missing_side_is_unset() {
+    let value = guatiao::Value::from(guatiao::Text::new("sha384"));
+    let difference = guatiao::schema::Difference {
+        path: vec!["pin".to_owned(), "digest".to_owned()],
+        value: Some(value),
+        baseline: None,
+    };
+    assert_eq!(
+        coqui_peer::NonDefault::from_difference(&difference),
+        coqui_peer::NonDefault::new("pin.digest", "sha384", "unset")
+    );
+}

@@ -8,7 +8,7 @@ package and is self-contained. Development documentation lives with the source a
 | Feature | Adds | Needed for | Default |
 | --- | --- | --- | --- |
 | `serde` | `serde`: `Serialize`/`Deserialize` for `PeerId` and `Digest` as their text | text formats the consumer picks | off |
-| `guatiao` | `guatiao` (`derive`): `ToValue`, `FromValue`, `Schema` for `Digest` (its lowercase name) and `WaitingLimits` (every key optional, unknown keys refused; `rerecord` reads a number of seconds, `[secs, nanos]` or `{secs, nanos}`) | configuration read through `guatiao-serde` | off |
+| `guatiao` | `guatiao` (`derive`), `guatiao-serde` (`json`): `NonDefault::from_difference` (a guatiao `Difference` as a `NonDefault`: `setting` is its key path, a text value its text, any other value compact JSON, a missing side `unset`); `ToValue`, `FromValue`, `Schema` for `Digest` (its lowercase name) and `WaitingLimits` (every key optional, unknown keys refused; `rerecord` reads a number of seconds, `[secs, nanos]` or `{secs, nanos}`) | configuration read through `guatiao-serde` | off |
 | `tokio` | `tokio` (`io-util`, `time`): module `asynch` | async drivers and frame functions | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` (`getrandom`) | PIN pairing (`Pairing::pin`), `Random::os` | off |
 | `coqui-transport` | `coqui-transport`: module `transport` | `PeerFrame`, and a `coqui_transport::Channel` as a `MessageTransport` | off |

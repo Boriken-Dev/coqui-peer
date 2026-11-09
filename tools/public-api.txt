@@ -354,6 +354,8 @@ pub coqui_peer::NonDefault::default: alloc::string::String
 pub coqui_peer::NonDefault::setting: alloc::string::String
 pub coqui_peer::NonDefault::value: alloc::string::String
 impl coqui_peer::NonDefault
+pub fn coqui_peer::NonDefault::from_difference(&guatiao::schema::differences::Difference) -> Self
+impl coqui_peer::NonDefault
 pub fn coqui_peer::NonDefault::new(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
 pub struct coqui_peer::PeerId
 impl coqui_peer::PeerId

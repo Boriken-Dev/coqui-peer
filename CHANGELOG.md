@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
-- Feature `guatiao`: `Digest` (as its lowercase name) and `WaitingLimits` derive guatiao's `ToValue`, `FromValue` and `Schema`, so a configuration type that holds them derives its own.
+- Feature `guatiao`: `NonDefault::from_difference` makes a `NonDefault` from guatiao's `Difference` (key path, text or compact JSON values). `Digest` (as its lowercase name) and `WaitingLimits` derive guatiao's `ToValue`, `FromValue` and `Schema`, so a configuration type that holds them derives its own.
 - Feature `coqui-transport` (off by default; it changes nothing else): module `transport` with `PeerFrame`, `write_frame`'s and `read_frame`'s wire as a `coqui_transport::frame` codec (`LengthPrefix::u32_be()`, empty messages allowed), held to the same vectors as the frame functions, and `ChannelTransport`, which drives a handshake over any `coqui_transport::Channel` as a `MessageTransport`, with the read and write timeouts the `_until` drivers set.
 - `PairingOptions::pin_shown` refuses a joiner who asks to show its own PIN, for a responder with no operator to answer one; such a run would otherwise wait for `pin_ttl`.
 

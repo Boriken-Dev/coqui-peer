@@ -47,7 +47,7 @@ cargo add coqui-peer@0.0.0-alpha.1
 | Feature | Adds | Needed for | Default |
 | --- | --- | --- | --- |
 | `serde` | `serde` | reading and writing `PeerId` and `Digest` as text, in the format you choose | off |
-| `guatiao` | `guatiao` (`derive`) | `Digest` and `WaitingLimits` as guatiao values with a schema | off |
+| `guatiao` | `guatiao` (`derive`), `guatiao-serde` | `Digest` and `WaitingLimits` as guatiao values with a schema, `NonDefault::from_difference` | off |
 | `tokio` | `tokio` (`io-util`, `time`) | the `asynch` drivers and frame functions | off |
 | `pin` | `spake2`, `hkdf`, `hmac`, `rand_core` | PIN pairing (`Pairing::pin`), `Random::os` | off |
 | `coqui-transport` | `coqui-transport` | module `transport`: `PeerFrame`, and a `coqui-transport` channel as a `MessageTransport` | off |
