@@ -14,6 +14,11 @@ use crate::error::Error;
 /// `Digest` values). MD5 is not supported at all. Methods whose keys are named by another
 /// algorithm add variants here, which is why the enum is non-exhaustive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    feature = "guatiao",
+    derive(guatiao::ToValue, guatiao::FromValue, guatiao::Schema),
+    map(rename_all = "lowercase")
+)]
 #[non_exhaustive]
 pub enum Digest {
     /// SHA-256, 32 bytes. The default and the only digest of an identity.

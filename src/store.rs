@@ -36,15 +36,27 @@ const MAX_EVENTS: usize = 1024;
 pub(crate) const DEFAULT_IPV6_PREFIX: u8 = 64;
 
 /// Bounds on the waiting queue.
+///
+/// With the `guatiao` feature the bounds are a guatiao value: every key is optional (an absent one
+/// is its default) and an unknown key is refused. `rerecord` is a duration: a number of seconds,
+/// `[secs, nanos]` or `{secs, nanos}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "guatiao",
+    derive(guatiao::ToValue, guatiao::FromValue, guatiao::Schema),
+    map(deny_unknown_fields)
+)]
 pub struct WaitingLimits {
     /// Entries one source may hold; past it, a newcomer is refused unless the store says otherwise
     /// ([`TrustStore::with_when_full`]). A source is an IPv4 address, or an IPv6 prefix
     /// ([`TrustStore::with_ipv6_prefix`], /64 by default).
+    #[cfg_attr(feature = "guatiao", map(default = WaitingLimits::default().per_source))]
     pub per_source: usize,
     /// Entries the whole directory may hold; past it nothing is recorded.
+    #[cfg_attr(feature = "guatiao", map(default = WaitingLimits::default().total))]
     pub total: usize,
     /// How long the same peer from the same source is not recorded again.
+    #[cfg_attr(feature = "guatiao", map(default = WaitingLimits::default().rerecord))]
     pub rerecord: Duration,
 }
 
