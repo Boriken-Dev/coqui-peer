@@ -79,7 +79,8 @@ fn third_example_key() -> KeyMaterial {
 }
 
 fn store_at(directory: &Path, seconds: u64) -> TrustStore {
-    TrustStore::builder(directory)
+    TrustStore::builder()
+        .state_dir(directory)
         .clock(Clock::from_fn(move || {
             UNIX_EPOCH + Duration::from_secs(seconds)
         }))

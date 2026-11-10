@@ -12,7 +12,7 @@ use coqui_peer::{
     ReadTimeout, drive_messages, drive_messages_until, read_frame, write_frame,
 };
 use coqui_transport::frame::{Codec, Decode, FrameError};
-use coqui_transport::{Channel, StreamChannel, memory};
+use coqui_transport::{Channel, StreamChannel, StreamChannelBuilder, memory};
 use serde_json::Value;
 
 const WAIT: Option<Duration> = Some(Duration::from_secs(10));
@@ -313,9 +313,11 @@ fn a_channel_that_ended_in_order_is_an_unexpected_end() {
 fn wide_pair() -> (StreamChannel, StreamChannel) {
     let (one, other) = memory::pipe(1 << 22);
     let wide = |stream| {
-        StreamChannel::builder(PeerFrame)
+        StreamChannelBuilder::new()
             .max_message(2 * MAX_MESSAGE)
-            .start(stream)
+            .codec(PeerFrame)
+            .stream(stream)
+            .build()
             .unwrap()
     };
     (wide(one), wide(other))

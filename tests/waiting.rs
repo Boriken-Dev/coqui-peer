@@ -26,9 +26,11 @@ fn limits(per_source: usize, total: usize) -> WaitingLimits {
 
 /// A queue with no rate limit, as most of these tests record in one instant.
 fn unpaced(limits: WaitingLimits) -> WaitingQueue {
-    WaitingQueue::builder(limits)
+    WaitingQueue::builder()
+        .limits(limits)
         .record_interval(Duration::ZERO)
         .build()
+        .unwrap()
 }
 
 /// A queue that replaces, the behaviour some of these tests are about.
@@ -37,11 +39,13 @@ fn replacing(limits: WaitingLimits) -> WaitingQueue {
 }
 
 fn replacing_by(limits: WaitingLimits, prefix: u8) -> WaitingQueue {
-    WaitingQueue::builder(limits)
+    WaitingQueue::builder()
+        .limits(limits)
         .record_interval(Duration::ZERO)
         .when_full(WhenFull::ReplaceOldest)
         .ipv6_prefix(prefix)
         .build()
+        .unwrap()
 }
 
 #[test]

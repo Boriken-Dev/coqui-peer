@@ -14,7 +14,9 @@ use coqui_peer::{
 fn builder() -> (tempfile::TempDir, coqui_peer::TrustStoreBuilder) {
     let directory = tempfile::tempdir().unwrap();
     // Most of these tests record in one instant: the rate limit has a test of its own.
-    let builder = TrustStore::builder(directory.path()).record_interval(Duration::ZERO);
+    let builder = TrustStore::builder()
+        .state_dir(directory.path())
+        .record_interval(Duration::ZERO);
     (directory, builder)
 }
 
@@ -759,7 +761,8 @@ fn a_successor_is_promoted_only_once_proven_unless_allowed() {
 
     // An option promotes without a proof.
     let (old, new) = (key("example", 3), key("example", 4));
-    let store = TrustStore::builder(directory.path())
+    let store = TrustStore::builder()
+        .state_dir(directory.path())
         .clock(hand.clock())
         .rotation({
             let mut value = RotationOptions::default();

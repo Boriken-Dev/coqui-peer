@@ -1,25 +1,46 @@
-//! The settings types as guatiao values: read from TOML and JSON, round-tripped, with the
+//! The settings types as `Describe` values: read from TOML and JSON through a `Partial`, with the
 //! defaults an absent key means, and the non-default settings they report.
 
 use std::time::Duration;
 
-use coqui_peer::pair::{DeskLimits, PairingDeskSettings, PairingOptions};
+use coqui_builder::describe::assert_round_trip;
+use coqui_builder::{Describe, KeyPath, Leaf, NonDefault, Partial, differences, non_defaults};
+use coqui_peer::pair::{CodeAlphabet, DeskLimits, PairingDeskSettings, PairingOptions};
 use coqui_peer::{
-    Digest, NonDefault, RotationOptions, TrustStoreSettings, WaitingLimits, WaitingSettings,
-    WhenFull,
+    Digest, RotationOptions, TrustStoreSettings, WaitingLimits, WaitingSettings, WhenFull,
 };
-use guatiao::{FromValue, Schema, ToValue};
-use guatiao_serde::Presentation;
-use guatiao_serde::text::{json, toml};
 
-fn plain() -> Presentation {
-    Presentation::new()
+fn from_toml<T: Describe>(text: &str) -> Result<T, String>
+where
+    Partial<T>: for<'de> serde::Deserialize<'de>,
+{
+    toml::from_str::<Partial<T>>(text)
+        .map_err(|error| error.to_string())?
+        .build()
+        .map_err(|error| error.to_string())
+}
+
+/// The settings of a report as `(key, value, default)` texts.
+fn lines(found: &[NonDefault]) -> Vec<(String, String, String)> {
+    found
+        .iter()
+        .map(|found| {
+            (
+                found.setting.clone(),
+                found.value.to_string(),
+                found.default.to_string(),
+            )
+        })
+        .collect()
+}
+
+fn line(setting: &str, value: &str, default: &str) -> (String, String, String) {
+    (setting.to_owned(), value.to_owned(), default.to_owned())
 }
 
 #[test]
 fn limits_read_from_toml_with_absent_keys_at_their_defaults() {
-    let limits: WaitingLimits =
-        toml::from_str_as("per_source = 4\nrerecord = 30\n", plain()).unwrap();
+    let limits: WaitingLimits = from_toml("per_source = 4\nrerecord = 30\n").unwrap();
     assert_eq!(limits, {
         let mut value = WaitingLimits::default();
         value.per_source = 4;
@@ -28,77 +49,61 @@ fn limits_read_from_toml_with_absent_keys_at_their_defaults() {
         value
     });
     assert_eq!(
-        toml::from_str_as::<WaitingLimits>("", plain()).unwrap(),
+        from_toml::<WaitingLimits>("").unwrap(),
         WaitingLimits::default()
     );
 }
 
 #[test]
-fn limits_round_trip_through_toml_and_json() {
-    let limits = {
-        let mut value = WaitingLimits::default();
-        value.per_source = 3;
-        value.total = 50;
-        value.rerecord = Duration::from_millis(1500);
-        value
-    };
-    let text = toml::to_string_of(&limits, plain()).unwrap();
-    assert_eq!(
-        toml::from_str_as::<WaitingLimits>(&text, plain()).unwrap(),
-        limits
-    );
-    let text = json::to_string_pretty_of(&limits, plain()).unwrap();
-    assert_eq!(
-        json::from_str_as::<WaitingLimits>(&text, plain()).unwrap(),
-        limits
-    );
-    assert_eq!(
-        WaitingLimits::from_value(&limits.to_value().unwrap()).unwrap(),
-        limits
-    );
+fn limits_read_from_json_and_a_duration_reads_with_its_unit() {
+    let limits = serde_json::from_str::<Partial<WaitingLimits>>(
+        r#"{"per_source": 3, "total": 50, "rerecord": "1500ms"}"#,
+    )
+    .unwrap()
+    .build()
+    .unwrap();
+    assert_eq!(limits.per_source, 3);
+    assert_eq!(limits.total, 50);
+    assert_eq!(limits.rerecord, Duration::from_millis(1500));
 }
 
 #[test]
-fn limits_refuse_an_unknown_key() {
-    assert!(toml::from_str_as::<WaitingLimits>("per_sourse = 1", plain()).is_err());
-    assert!(toml::from_str_as::<WaitingLimits>("total = \"many\"", plain()).is_err());
+fn limits_refuse_an_unknown_key_and_a_value_of_the_wrong_kind() {
+    assert!(from_toml::<WaitingLimits>("per_sourse = 1").is_err());
+    assert!(from_toml::<WaitingLimits>("total = \"many\"").is_err());
 }
 
 #[test]
-fn limits_schema_defaults_are_the_real_defaults() {
-    let schema = WaitingLimits::schema().unwrap();
-    let schema = guatiao::schema::SchemaRef::new(&schema).unwrap();
+fn every_limit_has_a_default_the_description_states() {
+    let description = WaitingLimits::description();
     for key in ["per_source", "total", "rerecord"] {
-        let field = schema.find(key).unwrap_or_else(|| panic!("{key}"));
-        assert!(field.default().is_some(), "{key} has a default");
+        let path: KeyPath = key.parse().unwrap();
+        assert!(description.default_at(path.segments()).is_some(), "{key}");
     }
 }
 
 #[test]
 fn a_digest_is_its_lowercase_name() {
-    for digest in [Digest::Sha256, Digest::Sha384, Digest::Sha512, Digest::Sha1] {
-        let value = digest.to_value().unwrap();
-        assert_eq!(String::from_value(&value).unwrap(), digest.name());
-        assert_eq!(Digest::from_value(&value).unwrap(), digest);
+    let all = [Digest::Sha256, Digest::Sha384, Digest::Sha512, Digest::Sha1];
+    assert_round_trip(&all);
+    for digest in all {
+        assert_eq!(digest.to_text(), digest.name());
     }
-    let value = "sha384".to_value().unwrap();
-    assert_eq!(Digest::from_value(&value).unwrap(), Digest::Sha384);
-    assert!(Digest::from_value(&"md5".to_value().unwrap()).is_err());
+    assert_eq!(Digest::from_text("sha384").unwrap(), Digest::Sha384);
+    assert!(Digest::from_text("md5").is_err());
+    assert!(Digest::from_text("SHA384").is_err());
 }
 
-fn reported(limits: &WaitingLimits) -> Vec<coqui_peer::NonDefault> {
-    let schema = WaitingLimits::schema().unwrap();
-    let schema = guatiao::schema::SchemaRef::new(&schema).unwrap();
-    guatiao::schema::differences(schema, &limits.to_value().unwrap(), None, "***")
-        .unwrap()
-        .iter()
-        .map(coqui_peer::NonDefault::from_difference)
-        .collect()
+#[test]
+fn a_when_full_is_its_kebab_case_name() {
+    assert_round_trip(&[WhenFull::Refuse, WhenFull::ReplaceOldest]);
+    assert_eq!(WhenFull::ReplaceOldest.to_text(), "replace-oldest");
+    assert!(WhenFull::from_text("sometimes").is_err());
 }
 
 #[test]
 fn the_defaults_report_nothing_and_each_changed_key_reports_itself() {
-    assert!(reported(&WaitingLimits::default()).is_empty());
+    assert!(non_defaults(&WaitingLimits::default()).is_empty());
     let limits = {
         let mut value = WaitingLimits::default();
         value.per_source = 4;
@@ -107,33 +112,19 @@ fn the_defaults_report_nothing_and_each_changed_key_reports_itself() {
         value
     };
     assert_eq!(
-        reported(&limits),
+        lines(&non_defaults(&limits)),
         [
-            coqui_peer::NonDefault::new("per_source", "4", "16"),
-            coqui_peer::NonDefault::new("rerecord", "[5,0]", "[60,0]"),
-            coqui_peer::NonDefault::new("total", "2000", "1000"),
+            line("per_source", "usize(4)", "usize(16)"),
+            line("rerecord", "Duration(5s)", "Duration(60s)"),
+            line("total", "usize(2000)", "usize(1000)"),
         ]
-    );
-}
-
-#[test]
-fn a_text_value_is_its_text_and_a_missing_side_is_unset() {
-    let value = guatiao::Value::from(guatiao::Text::new("sha384"));
-    let difference = guatiao::schema::Difference {
-        path: vec!["pin".to_owned(), "digest".to_owned()],
-        value: Some(value),
-        baseline: None,
-    };
-    assert_eq!(
-        coqui_peer::NonDefault::from_difference(&difference),
-        coqui_peer::NonDefault::new("pin.digest", "sha384", "unset")
     );
 }
 
 #[test]
 fn trust_store_settings_read_nested_keys_over_the_defaults() {
     let text = "[waiting]\nipv6_prefix = 48\nwhen_full = \"replace-oldest\"\n\n[waiting.limits]\nper_source = 4\n\n[rotation]\nretire_after = 3600\n";
-    let settings: TrustStoreSettings = toml::from_str_as(text, plain()).unwrap();
+    let settings: TrustStoreSettings = from_toml(text).unwrap();
     assert_eq!(settings.waiting.ipv6_prefix, 48);
     assert_eq!(settings.waiting.when_full, WhenFull::ReplaceOldest);
     assert_eq!(settings.waiting.limits.per_source, 4);
@@ -144,63 +135,91 @@ fn trust_store_settings_read_nested_keys_over_the_defaults() {
     assert_eq!(settings.rotation.retire_after, Duration::from_secs(3600));
     assert!(!settings.rotation.require_approval);
     assert_eq!(
-        toml::from_str_as::<TrustStoreSettings>("", plain()).unwrap(),
+        from_toml::<TrustStoreSettings>("").unwrap(),
         TrustStoreSettings::default()
     );
 }
 
 #[test]
-fn settings_round_trip_through_toml_and_json() {
-    let mut store = TrustStoreSettings::default();
-    store.waiting.record_interval = Duration::from_millis(250);
-    store.waiting.limits.total = 7;
-    store.rotation.allow_unproven = true;
-    let mut desk = PairingDeskSettings::default();
-    desk.options.pin_attempts = 3;
-    desk.options.device = false;
-    desk.limits.approver_window = Duration::from_secs(5);
-    let mut queue = WaitingSettings::default();
-    queue.ipv6_prefix = 128;
-    queue.when_full = WhenFull::ReplaceOldest;
+fn a_directory_is_not_a_key() {
+    assert!(from_toml::<TrustStoreSettings>("state_dir = \"/var/lib/app\"").is_err());
+}
 
-    let text = toml::to_string_of(&store, plain()).unwrap();
+#[test]
+fn desk_and_queue_settings_read_their_groups() {
+    let desk: PairingDeskSettings = from_toml(
+        "[options]\npin_attempts = 3\ndevice = false\n[limits]\napprover_window = \"5s\"\n[options.pin_alphabet]\nchars = \"01\"\nlen = 2\n",
+    )
+    .unwrap();
+    assert_eq!(desk.options.pin_attempts, 3);
+    assert!(!desk.options.device);
+    assert_eq!(desk.options.pin_alphabet, CodeAlphabet::new("01", 2));
+    assert_eq!(desk.limits.approver_window, Duration::from_secs(5));
+    assert_eq!(desk.limits.pending, DeskLimits::default().pending);
+    let queue: WaitingSettings =
+        from_toml("ipv6_prefix = 128\nwhen_full = \"replace-oldest\"").unwrap();
+    assert_eq!(queue.ipv6_prefix, 128);
+    assert_eq!(queue.when_full, WhenFull::ReplaceOldest);
+}
+
+#[test]
+fn a_half_given_alphabet_keeps_the_other_key_of_the_default() {
+    let desk: PairingDeskSettings = from_toml(
+        "[options.pin_alphabet]
+len = 4",
+    )
+    .unwrap();
     assert_eq!(
-        toml::from_str_as::<TrustStoreSettings>(&text, plain()).unwrap(),
-        store
+        desk.options.pin_alphabet,
+        CodeAlphabet::new("0123456789", 4)
     );
-    let text = json::to_string_pretty_of(&store, plain()).unwrap();
+    let desk: PairingDeskSettings = from_toml(
+        "[options.pin_alphabet]
+chars = \"01\"",
+    )
+    .unwrap();
+    assert_eq!(desk.options.pin_alphabet, CodeAlphabet::new("01", 6));
     assert_eq!(
-        json::from_str_as::<TrustStoreSettings>(&text, plain()).unwrap(),
-        store
+        from_toml::<PairingDeskSettings>(
+            "[options]
+pin_attempts = 2"
+        )
+        .unwrap()
+        .options
+        .pin_alphabet,
+        CodeAlphabet::pin()
     );
-    let text = toml::to_string_of(&desk, plain()).unwrap();
+}
+
+#[test]
+fn the_ttls_read_never_as_no_bound() {
+    let options: PairingOptions = from_toml("pin_ttl = \"never\"\ndevice_ttl = \"90s\"").unwrap();
+    assert_eq!(options.pin_ttl, None);
+    assert_eq!(options.device_ttl, Some(Duration::from_secs(90)));
+    let absent: PairingOptions = from_toml("").unwrap();
+    assert_eq!(absent.pin_ttl, Some(Duration::from_secs(600)));
+    assert_eq!(absent.device_ttl, Some(Duration::from_secs(600)));
     assert_eq!(
-        toml::from_str_as::<PairingDeskSettings>(&text, plain()).unwrap(),
-        desk
-    );
-    let text = json::to_string_pretty_of(&queue, plain()).unwrap();
-    assert_eq!(
-        json::from_str_as::<WaitingSettings>(&text, plain()).unwrap(),
-        queue
+        lines(&non_defaults(&options)),
+        [
+            line("device_ttl", "Duration(90s)", "Duration(600s)"),
+            line("pin_ttl", "Duration(never)", "Duration(600s)"),
+        ]
     );
 }
 
 #[test]
 fn settings_refuse_unknown_keys_at_every_level() {
-    assert!(toml::from_str_as::<TrustStoreSettings>("waitting = {}", plain()).is_err());
+    assert!(from_toml::<TrustStoreSettings>("waitting = {}").is_err());
+    assert!(from_toml::<TrustStoreSettings>("[waiting.limits]\nper_sourse = 1").is_err());
+    assert!(from_toml::<PairingDeskSettings>("[options]\nattempts = 1").is_err());
     assert!(
-        toml::from_str_as::<TrustStoreSettings>("[waiting.limits]\nper_sourse = 1", plain())
-            .is_err()
-    );
-    assert!(toml::from_str_as::<PairingDeskSettings>("[options]\nattempts = 1", plain()).is_err());
-    assert!(
-        toml::from_str_as::<PairingDeskSettings>(
-            "[options.pin_alphabet]\nchars = \"01\"\nlen = 2\nextra = 1",
-            plain()
+        from_toml::<PairingDeskSettings>(
+            "[options.pin_alphabet]\nchars = \"01\"\nlen = 2\nextra = 1"
         )
         .is_err()
     );
-    assert!(toml::from_str_as::<WaitingSettings>("when_full = \"sometimes\"", plain()).is_err());
+    assert!(from_toml::<WaitingSettings>("when_full = \"sometimes\"").is_err());
 }
 
 #[test]
@@ -220,24 +239,24 @@ fn the_defaults_report_nothing_and_each_changed_setting_is_named_by_its_key_path
         rotation
     };
     assert_eq!(
-        store.non_defaults(),
+        lines(&store.non_defaults()),
         [
-            NonDefault::new("rotation.allow_unproven", "true", "false"),
-            NonDefault::new("waiting.ipv6_prefix", "48", "64"),
-            NonDefault::new("waiting.limits.per_source", "4", "16"),
+            line("rotation.allow_unproven", "bool(true)", "bool(false)"),
+            line("waiting.ipv6_prefix", "u8(48)", "u8(64)"),
+            line("waiting.limits.per_source", "usize(4)", "usize(16)"),
         ]
     );
 
     let mut options = PairingOptions::default();
     options.pin_attempts = 3;
     options.device = false;
-    options.pin_alphabet = coqui_peer::pair::CodeAlphabet::new("0123456789", 4);
+    options.pin_alphabet = CodeAlphabet::new("0123456789", 4);
     assert_eq!(
-        options.non_defaults(),
+        lines(&options.non_defaults()),
         [
-            NonDefault::new("device", "false", "true"),
-            NonDefault::new("pin_alphabet.len", "4", "6"),
-            NonDefault::new("pin_attempts", "3", "1"),
+            line("device", "bool(false)", "bool(true)"),
+            line("pin_alphabet.len", "usize(4)", "usize(6)"),
+            line("pin_attempts", "u32(3)", "u32(1)"),
         ]
     );
 }
@@ -248,9 +267,16 @@ fn a_report_against_a_baseline_names_what_differs_from_it() {
     base.pin_attempts = 3;
     let mut options = base.clone();
     options.pin_attempts = 5;
+    let against = |value: &PairingOptions, baseline: &PairingOptions| -> Vec<NonDefault> {
+        differences(&PairingOptions::description(), value, Some(baseline))
+            .findings()
+            .iter()
+            .map(NonDefault::from)
+            .collect()
+    };
     assert_eq!(
-        NonDefault::of_settings_against(&options, &base),
-        [NonDefault::new("pin_attempts", "5", "3")]
+        lines(&against(&options, &base)),
+        [line("pin_attempts", "u32(5)", "u32(3)")]
     );
-    assert!(NonDefault::of_settings_against(&base, &base).is_empty());
+    assert!(against(&base, &base).is_empty());
 }

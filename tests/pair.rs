@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
+use coqui_builder::builder::BuildError;
 use coqui_peer::pair::{
     Channel, CodeAlphabet, DeskLimits, Mode, PairRefusal, Paired, Pairing, PairingDesk,
     PairingDeskBuilder, PairingError, PairingJoiner, PairingOptions, PairingResponder, Rotation,
@@ -59,11 +60,13 @@ struct Responder {
 fn fresh() -> Responder {
     let directory = tempfile::tempdir().unwrap();
     let hand = Hand::new();
-    let store = TrustStore::builder(directory.path())
+    let store = TrustStore::builder()
+        .state_dir(directory.path())
         .clock(hand.clock())
         .build()
         .unwrap();
-    let desk = PairingDesk::builder(counting(100))
+    let desk = PairingDesk::builder()
+        .random(counting(100))
         .clock(hand.clock())
         .build()
         .unwrap();
@@ -90,9 +93,13 @@ fn desk_with(
     world: &Responder,
     configure: impl FnOnce(PairingDeskBuilder) -> PairingDeskBuilder,
 ) -> PairingDesk {
-    configure(PairingDesk::builder(counting(100)).clock(world.hand.clock()))
-        .build()
-        .unwrap()
+    configure(
+        PairingDesk::builder()
+            .random(counting(100))
+            .clock(world.hand.clock()),
+    )
+    .build()
+    .unwrap()
 }
 
 /// A channel that proved both keys and verified the other side (a pin), with `binding`.
@@ -521,7 +528,8 @@ fn non_default_options_are_reported_not_refused() {
         value.pin_attempts = 3;
         value
     };
-    let desk = PairingDesk::builder(counting(0))
+    let desk = PairingDesk::builder()
+        .random(counting(0))
         .options(options.clone())
         .build()
         .unwrap();
@@ -532,25 +540,25 @@ fn non_default_options_are_reported_not_refused() {
         .map(|w| w.setting)
         .collect();
     assert_eq!(listed, ["pin_alphabet.len", "pin_attempts"]);
-    // The one NonDefault type of the crate root, with the default value beside the current one.
+    // The default value is listed beside the current one, each with the name of its type.
     let attempts = options
         .non_defaults()
         .into_iter()
-        .find(|w| w.setting == "pin_attempts");
-    assert_eq!(
-        attempts,
-        Some(coqui_peer::NonDefault::new("pin_attempts", "3", "1"))
-    );
+        .find(|w| w.setting == "pin_attempts")
+        .unwrap();
+    assert_eq!(attempts.value.to_string(), "u32(3)");
+    assert_eq!(attempts.default.to_string(), "u32(1)");
     let meaningless = {
         let mut value = PairingOptions::default();
         value.pin_attempts = 0;
         value
     };
     assert!(matches!(
-        PairingDesk::builder(counting(0))
+        PairingDesk::builder()
+            .random(counting(0))
             .options(meaningless)
             .build(),
-        Err(Error::InvalidOptions)
+        Err(BuildError::Failed(Error::InvalidOptions))
     ));
 }
 
@@ -940,7 +948,8 @@ fn a_tiny_user_code_alphabet_runs_out_instead_of_spinning() {
         out.copy_from_slice(&value.to_be_bytes()[..out.len()]);
         Ok(())
     });
-    let desk = PairingDesk::builder(stepping)
+    let desk = PairingDesk::builder()
+        .random(stepping)
         .clock(world.hand.clock())
         .options({
             let mut value = PairingOptions::default();
@@ -1172,13 +1181,13 @@ fn a_label_or_code_that_could_read_as_another_is_refused_on_receipt() {
 }
 
 #[test]
-fn ttls_of_duration_max_mean_never_and_do_not_overflow() {
+fn ttls_of_none_mean_never_and_do_not_overflow() {
     let world = fresh();
     let desk = desk_with(&world, |builder| {
         builder.options({
             let mut value = PairingOptions::default();
-            value.pin_ttl = Duration::MAX;
-            value.device_ttl = Duration::MAX;
+            value.pin_ttl = None;
+            value.device_ttl = None;
             value
         })
     });
